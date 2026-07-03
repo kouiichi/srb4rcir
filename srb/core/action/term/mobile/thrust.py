@@ -84,7 +84,10 @@ class ThrustAction(ActionTerm):
         self._remaining_fuel = cfg.fuel_capacity * torch.ones(
             env.num_envs, device=env.device
         )
-        self._dry_masses = self._asset.root_physx_view.get_masses().clone()
+        self._dry_masses = (
+            self._asset.root_physx_view.get_masses().to(device=env.device).clone()
+        )
+        self._physx_tensor_device = self._asset.root_physx_view.get_masses().device
 
         ## Set up visualization markers
         if self.cfg.debug_vis:
@@ -165,7 +168,11 @@ class ThrustAction(ActionTerm):
         thruster_offsets = self._thruster_offset.unsqueeze(0).expand(
             self.num_envs, -1, -1
         )
-        com_positions = self._asset.root_physx_view.get_coms()[:, :3].unsqueeze(1)
+        com_positions = (
+            self._asset.root_physx_view.get_coms()
+            .to(device=self.device)[:, :3]
+            .unsqueeze(1)
+        )
         thruster_offsets_com = thruster_offsets - com_positions
 
         ## Calculate torques resulting from thruster forces
@@ -173,10 +180,10 @@ class ThrustAction(ActionTerm):
 
         ## Apply forces and torques at center of mass in the local frame
         self._asset.root_physx_view.apply_forces_and_torques_at_position(
-            force_data=thruster_forces.sum(dim=1),
-            torque_data=thruster_torques.sum(dim=1),
-            position_data=com_positions,
-            indices=self._asset._ALL_INDICES,
+            force_data=thruster_forces.sum(dim=1).to(device=self._physx_tensor_device),
+            torque_data=thruster_torques.sum(dim=1).to(device=self._physx_tensor_device),
+            position_data=com_positions.to(device=self._physx_tensor_device),
+            indices=self._asset._ALL_INDICES.to(device=self._physx_tensor_device),
             is_global=False,
         )
 
@@ -188,11 +195,20 @@ class ThrustAction(ActionTerm):
         )
         self._remaining_fuel.clamp_(min=0.0)
         masses = self._dry_masses + self._remaining_fuel.unsqueeze(-1)
-        mass_decrease_ratio = masses / self._asset.root_physx_view.get_masses()
-        self._asset.root_physx_view.set_masses(masses, indices=self._asset._ALL_INDICES)
+        current_masses = self._asset.root_physx_view.get_masses().to(device=masses.device)
+        mass_decrease_ratio = masses / current_masses
+        self._asset.root_physx_view.set_masses(
+            masses.to(device=self._physx_tensor_device),
+            indices=self._asset._ALL_INDICES.to(device=self._physx_tensor_device),
+        )
+        current_inertias = self._asset.root_physx_view.get_inertias().to(
+            device=masses.device
+        )
         self._asset.root_physx_view.set_inertias(
-            mass_decrease_ratio * self._asset.root_physx_view.get_inertias(),
-            indices=self._asset._ALL_INDICES,
+            (mass_decrease_ratio * current_inertias).to(
+                device=self._physx_tensor_device
+            ),
+            indices=self._asset._ALL_INDICES.to(device=self._physx_tensor_device),
         )
 
         ## Update visualization markers
