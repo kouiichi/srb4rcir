@@ -107,7 +107,13 @@ def run_agent_with_env(
     from srb.core.app import AppLauncher
 
     # Preprocess kwargs
-    kwargs["enable_cameras"] = video_enable or env_id.endswith("_visual")
+    algo = kwargs.get("algo") or ""
+    sb3_gpu_enable_cameras = (
+        agent_subcommand == "train" and str(algo).startswith("sb3_gpu")
+    )
+    kwargs["enable_cameras"] = (
+        video_enable or env_id.endswith("_visual") or sb3_gpu_enable_cameras
+    )
     kwargs["experience"] = SRB_APPS_DIR.joinpath(
         f"srb.{'headless.' if headless else ''}{'rendering.' if kwargs['enable_cameras'] else ''}{'xr.' if kwargs['xr'] else ''}kit"
     )
@@ -173,14 +179,27 @@ def run_agent_with_env(
     def hydra_main(env_cfg: Dict[str, Any], agent_cfg: Dict[str, Any] | None = None):
         import gymnasium
 
+        sb3_gpu_eval_video_enable = (
+            agent_subcommand == "train"
+            and str(kwargs.get("algo") or "").startswith("sb3_gpu")
+            and bool((agent_cfg or {}).get("eval_video", True))
+        )
+        render_enable = video_enable or sb3_gpu_eval_video_enable
+
+        if render_enable:
+            __configure_video_scene(env_cfg)
+
         # Create the environment and initialize it
         env = gymnasium.make(
-            id=env_id, cfg=env_cfg, render_mode="rgb_array" if video_enable else None
+            id=env_id, cfg=env_cfg, render_mode="rgb_array" if render_enable else None
         )
         env.reset()
 
         # Add wrapper for video recording
+        if sb3_gpu_eval_video_enable and not video_enable:
+            env = __wrap_env_in_video_lighting(env)
         if video_enable:
+            env = __wrap_env_in_video_lighting(env)
             env = gymnasium.wrappers.RecordVideo(
                 env,
                 video_folder=logdir.joinpath("videos").as_posix(),
@@ -838,6 +857,12 @@ def train_agent(algo: str, **kwargs):
             from srb.integrations.skrl import main as skrl
 
             skrl.run(workflow=WORKFLOW, **kwargs)
+        case _sb3_gpu if algo.startswith("sb3_gpu"):
+            from srb.integrations import sb3_gpu
+
+            sb3_gpu.run(
+                workflow=WORKFLOW, algo=algo.removeprefix("sb3_gpu_"), **kwargs
+            )
         case _sb3 if algo.startswith("sb3"):
             from srb.integrations.sb3 import main as sb3
 
@@ -860,6 +885,12 @@ def eval_agent(algo: str, **kwargs):
             from srb.integrations.skrl import main as skrl
 
             skrl.run(workflow=WORKFLOW, **kwargs)
+        case _sb3_gpu if algo.startswith("sb3_gpu"):
+            from srb.integrations import sb3_gpu
+
+            sb3_gpu.run(
+                workflow=WORKFLOW, algo=algo.removeprefix("sb3_gpu_"), **kwargs
+            )
         case _sb3 if algo.startswith("sb3"):
             from srb.integrations.sb3 import main as sb3
 
@@ -1640,7 +1671,8 @@ def __wrap_env_in_performance_test(
             self.__num_envs = _env.num_envs
             self.__agent_rate = _env.cfg.agent_rate
 
-            self._perf_num_steps = 0
+            self._perf_num_env_steps = 0
+            self._perf_num_sample_steps = 0
             self._perf_num_episodes = 0
             self._perf_total_time = 0.0
             self._perf_step_timings = deque(maxlen=max_buffer_size)
@@ -1659,7 +1691,8 @@ def __wrap_env_in_performance_test(
             t_end = time.perf_counter()
             step_timing = t_end - t_start
             self._perf_step_timings.append(step_timing)
-            self._perf_num_steps += self.__num_envs
+            self._perf_num_env_steps += 1
+            self._perf_num_sample_steps += self.__num_envs
             self._perf_total_time += step_timing
 
             # Episode end detection
@@ -1675,7 +1708,10 @@ def __wrap_env_in_performance_test(
                 self._perf_last_report_time = t_end
 
             # Check for duration limit
-            if self._perf_total_time >= self.__perf_duration:
+            if (
+                self.__perf_duration > 0.0
+                and self._perf_total_time >= self.__perf_duration
+            ):
                 self.__perf_report(final=True)
                 print("The performance test has finished (duration limit reached).")
                 env.close()
@@ -1685,11 +1721,14 @@ def __wrap_env_in_performance_test(
             return obs, reward, terminated, truncated, info
 
         def __perf_report(self, episode_end: bool = False, final: bool = False):
-            steps = self._perf_num_steps
+            env_steps = self._perf_num_env_steps
+            sample_steps = self._perf_num_sample_steps
             episodes = self._perf_num_episodes
             total_time = self._perf_total_time
             timings = torch.tensor(list(self._perf_step_timings))
-            steps_per_sec = steps / total_time if total_time > 0 else 0
+            env_steps_per_sec = env_steps / total_time if total_time > 0 else 0
+            sample_steps_per_sec = sample_steps / total_time if total_time > 0 else 0
+            episodes_per_sec = episodes / total_time if total_time > 0 else 0
             mean_step_time = torch.mean(timings).item() if timings.numel() > 0 else 0
             median_step_time = (
                 torch.median(timings).item() if timings.numel() > 0 else 0
@@ -1720,7 +1759,7 @@ def __wrap_env_in_performance_test(
             if not hasattr(self, "_perf_episode_lengths"):
                 self._perf_episode_lengths = []
             if episode_end and self._perf_num_episodes > 0:
-                last_episode_len = self._perf_num_steps / self._perf_num_episodes
+                last_episode_len = self._perf_num_sample_steps / self._perf_num_episodes
                 self._perf_episode_lengths.append(last_episode_len)
             episode_lengths = torch.tensor(self._perf_episode_lengths)
             mean_episode_len = (
@@ -1743,10 +1782,13 @@ def __wrap_env_in_performance_test(
             report = (
                 f"\nPerformance Report{' (final)' if final else ''}:\n"
                 f"    Elapsed time (s)       : {total_time:.2f}\n"
-                f"    Total steps (#)        : {steps}\n"
+                f"    Env step calls (#)     : {env_steps}\n"
+                f"    Sample steps (#)       : {sample_steps} ({self.__num_envs} envs per env step)\n"
                 f"    Total episodes (#)     : {episodes}\n"
-                f"    Steps per second (#/s) : {steps_per_sec:.2f}\n"
-                f"    Step time (ms)         : min={min_step_time * 1000:.3f}, p10={step_time_percentiles[0] * 1000:.3f}, p20={step_time_percentiles[1] * 1000:.3f}, mean={mean_step_time * 1000:.3f}, median={median_step_time * 1000:.3f}, p80={step_time_percentiles[2] * 1000:.3f}, p90={step_time_percentiles[3] * 1000:.3f}, max={max_step_time * 1000:.3f}\n"
+                f"    Env steps per second   : {env_steps_per_sec:.2f}\n"
+                f"    Sample steps per second: {sample_steps_per_sec:.2f}\n"
+                f"    Episodes per second    : {episodes_per_sec:.4f}\n"
+                f"    Env step time (ms)     : min={min_step_time * 1000:.3f}, p10={step_time_percentiles[0] * 1000:.3f}, p20={step_time_percentiles[1] * 1000:.3f}, mean={mean_step_time * 1000:.3f}, median={median_step_time * 1000:.3f}, p80={step_time_percentiles[2] * 1000:.3f}, p90={step_time_percentiles[3] * 1000:.3f}, max={max_step_time * 1000:.3f}\n"
                 f"    Episode length (steps) : min={min_episode_len:.1f}, p10={episode_len_percentiles[0]:.1f}, p20={episode_len_percentiles[1]:.1f}, mean={mean_episode_len:.1f}, median={median_episode_len:.1f}, p80={episode_len_percentiles[2]:.1f}, p90={episode_len_percentiles[3]:.1f}, max={max_episode_len:.1f}\n"
                 f"    Episode length (s)     : min={self.__agent_rate * min_episode_len:.1f}, p10={self.__agent_rate * episode_len_percentiles[0]:.1f}, p20={self.__agent_rate * episode_len_percentiles[1]:.1f}, mean={self.__agent_rate * mean_episode_len:.1f}, median={self.__agent_rate * median_episode_len:.1f}, p80={self.__agent_rate * episode_len_percentiles[2]:.1f}, p90={self.__agent_rate * episode_len_percentiles[3]:.1f}, max={self.__agent_rate * max_episode_len:.1f}\n"
             )
@@ -1757,6 +1799,110 @@ def __wrap_env_in_performance_test(
                     f.write(report + "\n")
 
     return PerformanceTestWrapper(env, output=perf_output, duration=perf_duration)
+
+
+def __configure_video_scene(env_cfg):
+    from srb.core.asset import AssetBaseCfg
+    from srb.core.sim import DistantLightCfg, DomeLightCfg
+    from srb.utils.math import rpy_to_quat
+
+    scene = getattr(env_cfg, "scene", None)
+    if scene is not None:
+        scene.skydome = AssetBaseCfg(
+            prim_path="/World/skydome",
+            spawn=DomeLightCfg(
+                intensity=1000.0,
+                color=(0.5, 0.5, 0.5),
+                texture_file=None,
+                visible_in_primary_ray=True,
+            ),
+        )
+        scene.sunlight = AssetBaseCfg(
+            prim_path="/World/sunlight",
+            spawn=DistantLightCfg(
+                intensity=6000.0,
+                angle=10.0,
+                color=(1.0, 1.0, 1.0),
+                enable_color_temperature=False,
+            ),
+            init_state=AssetBaseCfg.InitialStateCfg(
+                rot=rpy_to_quat(35.0, 25.0, 0.0),
+            ),
+        )
+
+    events = getattr(env_cfg, "events", None)
+    if events is not None:
+        events.randomize_sunlight_orientation = None
+        events.randomize_sunlight_intensity = None
+        events.randomize_sunlight_angular_diameter = None
+        events.randomize_sunlight_color_temperature = None
+        events.randomize_skydome_orientation = None
+
+    sim = getattr(env_cfg, "sim", None)
+    render = getattr(sim, "render", None)
+    if render is not None:
+        render.enable_direct_lighting = True
+        render.enable_reflections = False
+        render.enable_global_illumination = False
+        render.enable_shadows = False
+        render.enable_ambient_occlusion = False
+        render.samples_per_pixel = 1
+
+
+def __wrap_env_in_video_lighting(env: "AnyEnv") -> "AnyEnv":
+    import gymnasium
+    import torch
+
+    class VideoLightingWrapper(gymnasium.Wrapper):
+        def reset(self, *args, **kwargs):
+            reset_return = super().reset(*args, **kwargs)
+            self._set_video_key_light()
+            return reset_return
+
+        def _set_video_key_light(self):
+            from isaaclab.sim.spawners.lights import SphereLightCfg
+            from pxr import Gf, UsdGeom
+
+            unwrapped = self.unwrapped
+            scene = getattr(unwrapped, "scene", None)
+            sim = getattr(unwrapped, "sim", None)
+            if scene is None or sim is None:
+                return
+
+            try:
+                env_index = int(unwrapped.cfg.viewer.env_index)
+                env_origin = scene.env_origins[env_index].detach().cpu()
+                eye_offset = torch.tensor(
+                    unwrapped.cfg.viewer.eye, dtype=torch.float32
+                ).cpu()
+            except (AttributeError, IndexError, TypeError):
+                return
+
+            eye = env_origin + eye_offset
+            prim_path = "/World/video_key_light"
+            stage = sim.stage
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                light_cfg = SphereLightCfg(
+                    intensity=1000000.0,
+                    radius=2.0,
+                    treat_as_point=False,
+                    exposure=0.0,
+                )
+                light_cfg.func(prim_path, light_cfg, translation=tuple(eye.tolist()))
+                return
+
+            xformable = UsdGeom.Xformable(prim)
+            translate_op = None
+            for op in xformable.GetOrderedXformOps():
+                if op.GetOpName() == "xformOp:translate":
+                    translate_op = op
+                    break
+            if translate_op is None:
+                translate_op = xformable.AddTranslateOp()
+            translate_op.Set(Gf.Vec3d(*eye.tolist()))
+
+    return VideoLightingWrapper(env)  # type: ignore
 
 
 ### CLI ###
@@ -2348,6 +2494,9 @@ class SupportedAlgo(str, Enum):
     SB3_TD3 = auto()
     SB3_TQC = auto()
     SB3_TRPO = auto()
+
+    # Stable-Baselines3 with SRB GPU-oriented eval/video callback
+    SB3_GPU_PPO = auto()
 
     # SBX
     SBX_CROSSQ = auto()

@@ -7,7 +7,7 @@ import gymnasium
 import numpy
 from isaacsim.simulation_app import SimulationApp
 from rl_zoo3 import ALGOS
-from stable_baselines3.common.callbacks import tqdm
+from stable_baselines3.common.callbacks import BaseCallback, tqdm
 
 from srb.integrations.sb3.exp_manager import ExperimentManager
 from srb.integrations.sb3.wrapper import Sb3EnvWrapper
@@ -20,6 +20,36 @@ if TYPE_CHECKING:
 
 FRAMEWORK_NAME = "sb3"
 OFF_POLICY_ALGOS: Sequence[str] = ("qrdqn", "dqn", "ddpg", "sac", "her", "td3", "tqc")
+
+
+class SuccessStatsCallback(BaseCallback):
+    def __init__(self, verbose: int = 0):
+        super().__init__(verbose=verbose)
+        self._episodes = 0
+        self._successes = 0
+
+    def _on_step(self) -> bool:
+        updated = False
+        for info in self.locals.get("infos", []):
+            if not isinstance(info, dict):
+                continue
+            if info.get("episode") is None or "is_success" not in info:
+                continue
+            self._episodes += 1
+            self._successes += int(bool(info["is_success"]))
+            updated = True
+
+        if updated:
+            success_rate = self._successes / max(self._episodes, 1)
+            self.logger.record("train/success_count", self._successes)
+            self.logger.record("train/episode_count", self._episodes)
+            self.logger.record("train/success_rate_total", success_rate)
+            logging.info(
+                "Training successes: "
+                f"{self._successes}/{self._episodes} "
+                f"({100.0 * success_rate:.2f}%)"
+            )
+        return True
 
 
 def run(
@@ -130,6 +160,9 @@ def run(
     match workflow:
         case "train":
             agent_model, _saved_hyperparams = exp_manager.setup_experiment()  # type: ignore
+            exp_manager.callbacks.append(
+                SuccessStatsCallback(verbose=1 if verbose else 0)
+            )
             exp_manager.learn(agent_model)
             exp_manager.save_trained_model(agent_model)
         case "optimize":
