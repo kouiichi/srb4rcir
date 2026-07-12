@@ -3519,7 +3519,7 @@ dependencies = [
  "const_format",
  "display_json",
  "eframe",
- "egui 0.32.3",
+ "egui 0.34.3",
  "egui_commonmark",
  "egui_extras",
  "glob",
