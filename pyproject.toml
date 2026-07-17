@@ -132,7 +132,7 @@ rich = [
 ]
 test = [
   #
-  "pytest~=8.0",
+  "pytest~=9.0",
   "pytest-order~=1.0",
   "pytest-sugar~=1.0",
   "lark~=1.0",
