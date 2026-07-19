@@ -1076,7 +1076,7 @@ dependencies = [
  "egui 0.35.0",
  "egui_commonmark_backend",
  "egui_commonmark_macros",
- "egui_extras 0.35.0",
+ "egui_extras",
  "pulldown-cmark",
 ]
 
@@ -1087,7 +1087,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5758a1110eb8259743c9b220241c30ff014b2dec53c1a2b861d464e41fa3483e"
 dependencies = [
  "egui 0.35.0",
- "egui_extras 0.35.0",
+ "egui_extras",
  "pulldown-cmark",
  "syntect",
 ]
@@ -1109,34 +1109,21 @@ dependencies = [
 
 [[package]]
 name = "egui_extras"
-version = "0.34.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "598d8675f6fd9088db8a93d8c7aacda936b2f3d0c2b0660ad1744a45b5caf922"
-dependencies = [
- "ahash",
- "egui 0.34.3",
- "ehttp",
- "enum-map",
- "image",
- "log",
- "mime_guess2",
- "profiling",
- "resvg",
- "syntect",
-]
-
-[[package]]
-name = "egui_extras"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2bd33be7338367bf21f54d62e069d58a5fb3ae033fa8bc6df7a77b9ef4cf957"
 dependencies = [
  "ahash",
  "egui 0.35.0",
+ "ehttp",
  "enum-map",
+ "image",
  "itertools 0.14.0",
  "log",
+ "mime_guess2",
  "profiling",
+ "resvg",
+ "syntect",
 ]
 
 [[package]]
@@ -3673,7 +3660,7 @@ dependencies = [
  "eframe",
  "egui 0.34.3",
  "egui_commonmark",
- "egui_extras 0.34.3",
+ "egui_extras",
  "glob",
  "home",
  "image",
