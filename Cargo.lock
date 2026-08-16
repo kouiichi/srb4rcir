@@ -999,9 +999,9 @@ dependencies = [
 
 [[package]]
 name = "egui"
-version = "0.36.0"
+version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e70d4e8e8896ba5becb0bc1c8c06d203cb44ff16a93d7a619a5e565500085d"
+checksum = "c977ac91dfaa651633fd9722e4ce9ccb32cda4c748b89a5cb57e504036e37c13"
 dependencies = [
  "accesskit 0.24.1",
  "ahash",
@@ -1044,7 +1044,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19e757b2a0639f5f75793e6936ad4c86e8b58ee379d23578ad6924ba9f75ec38"
 dependencies = [
- "egui 0.36.0",
+ "egui 0.36.1",
  "egui_commonmark_backend",
  "egui_commonmark_macros",
  "egui_extras",
@@ -1057,7 +1057,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67e182e6b923b0ade1152f67e7d827cbc266fca7782d50249de0c4cad1a2a4e5"
 dependencies = [
- "egui 0.36.0",
+ "egui 0.36.1",
  "egui_extras",
  "pulldown-cmark",
  "syntect",
@@ -1069,7 +1069,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d2de7f9ac5b775ec570f49a1a7b3816a6dc5e1046e69e6e452df5ea7b654806"
 dependencies = [
- "egui 0.36.0",
+ "egui 0.36.1",
  "egui_commonmark_backend",
  "proc-macro-crate",
  "proc-macro2",
@@ -1085,7 +1085,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2cb8e069ccbb4b9f49e9c8f52637a088dc520b1d20f4071fdcb801ec4606fc4"
 dependencies = [
  "ahash",
- "egui 0.36.0",
+ "egui 0.36.1",
  "ehttp",
  "enum-map",
  "image",
@@ -3557,7 +3557,7 @@ dependencies = [
  "const_format",
  "display_json",
  "eframe",
- "egui 0.36.0",
+ "egui 0.36.1",
  "egui_commonmark",
  "egui_extras",
  "glob",
