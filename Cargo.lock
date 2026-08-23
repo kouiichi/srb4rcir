@@ -1080,9 +1080,9 @@ dependencies = [
 
 [[package]]
 name = "egui_extras"
-version = "0.36.0"
+version = "0.36.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2cb8e069ccbb4b9f49e9c8f52637a088dc520b1d20f4071fdcb801ec4606fc4"
+checksum = "1e651e08ddf6bb8bfd964ad70e33bc721c093f2b77ab59580e7140c008dab68c"
 dependencies = [
  "ahash",
  "egui 0.36.1",
