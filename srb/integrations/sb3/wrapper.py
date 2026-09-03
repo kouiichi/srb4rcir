@@ -271,6 +271,7 @@ class Sb3EnvWrapper(VecEnv):
                 "r": float(self._ep_rew_buf[idx]),
                 "l": float(self._ep_len_buf[idx]),
             }
+            self._fill_episode_success_info(infos[idx], extras, idx)
 
             # Fill-in bootstrap information
             infos[idx]["TimeLimit.truncated"] = truncated[idx] and not terminated[idx]
@@ -283,3 +284,39 @@ class Sb3EnvWrapper(VecEnv):
             infos[idx]["terminal_observation"] = terminal_obs
 
         return infos
+
+    def _fill_episode_success_info(
+        self, info: Dict[str, Any], extras: Dict[str, Any], idx: int
+    ):
+        episode = info.get("episode")
+        if episode is None:
+            return
+
+        for key in (
+            "is_success",
+            "success_instant",
+            "success_streak",
+            "distance_robot_to_target",
+            "attitude_error_robot_to_target",
+            "relative_speed_robot_to_target",
+        ):
+            if key not in extras:
+                continue
+            value = extras[key]
+            if isinstance(value, torch.Tensor):
+                value = value[idx].detach().cpu()
+                if value.numel() == 1:
+                    value = value.item()
+                else:
+                    value = value.numpy()
+            elif isinstance(value, numpy.ndarray):
+                value = value[idx]
+                if numpy.asarray(value).size == 1:
+                    value = numpy.asarray(value).item()
+
+            if key == "is_success":
+                value = bool(value)
+                info["is_success"] = value
+                episode[key] = float(value)
+            else:
+                episode[key] = float(value)

@@ -1,4 +1,4 @@
-n_timesteps: 100000000
+n_timesteps: 200000000
 policy: "MultiInputPolicy"
 batch_size: 1200
 clip_range: 0.2
@@ -20,10 +20,18 @@ policy_kwargs: "dict(
 policy_device: "auto"
 
 # Online eval/video settings.
-eval_every_episodes: 100
+eval_every_episodes: 10000
 eval_n_episodes: 1
 eval_video: true
 eval_video_timesteps: 1200
 eval_video_num_envs: 1
 eval_video_prefix: "eval"
 concat_eval_videos: true
+eval_video_camera: # eval train
+  eye: [15.0,-18.0,10.0] # [15.0, -25.0, 18.0] 
+  lookat: [15.0,0.0,0.25] # [15.0, 0.0, 0.25]
+  origin_type: "env"
+  resolution: [1280, 720]
+  focal_length: 22.0 # 16.0
+  horizontal_aperture: 24.0
+  clipping_range: [0.1, 80.0]

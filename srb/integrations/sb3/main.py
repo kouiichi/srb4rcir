@@ -83,6 +83,7 @@ def run(
     n_evaluations = agent_cfg.pop("n_evaluations", 1)
     # HER
     truncate_last_trajectory = agent_cfg.pop("truncate_last_trajectory", True)
+    agent_cfg.pop("eval_video_camera", None)
 
     # Pop the entire smoothing config dictionary to be handled separately.
     smoothing_cfg = agent_cfg.pop("smoothing", {})

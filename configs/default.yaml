@@ -1,0 +1,40 @@
+# Canonical 20 Hz NMPC configuration.  Keep synchronized with
+# configs/nmpc/default.yaml; this short path is used by scripts/smoke_test.py.
+control_frequency_hz: 20
+control_period_s: 0.05
+horizon_steps: 20
+horizon_seconds: 1.0
+rk4_substeps: 5
+rk4_substep_dt_s: 0.01
+action_block_lengths: [3, 3, 3, 3, 2, 2, 2, 2]
+
+solver:
+  oracle: ipopt
+  production: acados
+  qp_solver: PARTIAL_CONDENSING_HPIPM
+  nlp_solver_type: SQP_RTI
+  oracle_max_iterations: 80
+  production_max_iterations: 1
+  tolerance: 1.0e-6
+  qp_solver_cond_N: 5
+  qp_solver_iter_max: 100
+  code_export_root: third_party/acados/generated
+
+actuator:
+  channels: 16
+  tmax_N: 0.1
+  rho_m: 0.30
+  delta_m: 0.05
+  duty_min: 0.0
+  duty_max: 1.0
+  duty_rate_per_s: 20.0
+  reverse_pair_limit: 1.0
+
+model:
+  type: hcw_quaternion_rigid_body
+  state_dim: 13
+  quaternion_order: scalar_first
+  quaternion_frame: q_LB
+  angular_rate_frame: omega_BI_B
+  target_angular_velocity_episode_constant: true
+  camera_target_point_T_m: [0.0, 0.0, 0.0]

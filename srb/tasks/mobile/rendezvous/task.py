@@ -6,7 +6,13 @@ from srb import assets
 from srb._typing import StepReturn
 from srb.core.action import ThrustAction
 from srb.core.asset import RigidObject, RigidObjectCfg
-from srb.core.env import OrbitalEnv, OrbitalEnvCfg, OrbitalEventCfg, OrbitalSceneCfg
+from srb.core.env import (
+    OrbitalEnv,
+    OrbitalEnvCfg,
+    OrbitalEventCfg,
+    OrbitalSceneCfg,
+    ViewerCfg,
+)
 from srb.core.manager import EventTermCfg, SceneEntityCfg
 from srb.core.marker import VisualizationMarkers, VisualizationMarkersCfg
 from srb.core.mdp import reset_root_state_uniform
@@ -16,6 +22,7 @@ from srb.utils.math import (
     combine_frame_transforms,
     deg_to_rad,
     matrix_from_quat,
+    quat_error_magnitude,
     rotmat_to_rot6d,
     rpy_to_quat,
     subtract_frame_transforms,
@@ -41,7 +48,7 @@ class EventCfg(OrbitalEventCfg):
         params={
             "asset_cfg": SceneEntityCfg("target"),
             "pose_range": {
-                "x": (0.5, 2.0),
+                "x": (20.0, 30.0),
                 "y": (-2.0, 2.0),
                 "z": (-2.0, 2.0),
                 "roll": (-torch.pi, torch.pi),
@@ -69,12 +76,25 @@ class TaskCfg(OrbitalEnvCfg):
     events: EventCfg = EventCfg()
 
     ## Time
-    episode_length_s: float = 25.0
+    episode_length_s: float = 60.0
     is_finite_horizon: bool = True
+
+    ## Viewer
+    viewer: ViewerCfg = ViewerCfg(
+        eye=(15.0, -24.0, 12.0),
+        lookat=(15.0, 0.0, 0.25),
+        origin_type="env",
+    )
 
     ## Target offset
     target_offset_pos: Tuple[float, float, float] = (0.0, 0.0, 0.5)
     target_offset_quat: Tuple[float, float, float, float] = rpy_to_quat(0.0, 90.0, 0.0)
+
+    ## Success criteria
+    success_distance_threshold: float = 1
+    success_attitude_error_threshold: float = deg_to_rad(20.0)
+    success_relative_speed_threshold: float = 0.3
+    success_hold_steps: int = 10
     target_marker_cfg: VisualizationMarkersCfg = VisualizationMarkersCfg(
         prim_path="/Visuals/target",
         markers={
@@ -120,9 +140,21 @@ class Task(OrbitalEnv):
         self._target_offset_quat = torch.tensor(
             self.cfg.target_offset_quat, dtype=torch.float32, device=self.device
         ).repeat(self.num_envs, 1)
+        self._success_streak = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self._success_once = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        self._prev_distance_robot_to_target = torch.zeros(
+            self.num_envs, dtype=torch.float32, device=self.device
+        )
 
     def _reset_idx(self, env_ids: Sequence[int]):
         super()._reset_idx(env_ids)
+        self._success_streak[env_ids] = 0
+        self._success_once[env_ids] = False
+        self._prev_distance_robot_to_target[env_ids] = 0.0
 
     def extract_step_return(self) -> StepReturn:
         ## Compute the target pose with offset
@@ -147,11 +179,12 @@ class Task(OrbitalEnv):
         else:
             remaining_fuel = None
 
-        return _compute_step_return(
+        step_return = _compute_step_return(
             ## Time
             episode_length=self.episode_length_buf,
             max_episode_length=self.max_episode_length,
             truncate_episodes=self.cfg.truncate_episodes,
+            success_hold_steps=self.cfg.success_hold_steps,
             ## Actions
             act_current=self.action_manager.action,
             act_previous=self.action_manager.prev_action,
@@ -166,12 +199,31 @@ class Task(OrbitalEnv):
             # Transforms (world frame)
             tf_pos_target=tf_pos_target,
             tf_quat_target=tf_quat_target,
+            vel_lin_robot_w=self._robot.data.root_lin_vel_w,
+            vel_lin_target_w=self._target.data.root_lin_vel_w,
             # IMU
             imu_lin_acc=self._imu_robot.data.lin_acc_b,
             imu_ang_vel=self._imu_robot.data.ang_vel_b,
             # Fuel
             remaining_fuel=remaining_fuel,
+            # Progress
+            prev_distance_robot_to_target=self._prev_distance_robot_to_target,
+            # Success
+            prev_success_streak=self._success_streak,
+            prev_success_once=self._success_once,
+            success_distance_threshold=self.cfg.success_distance_threshold,
+            success_attitude_error_threshold=self.cfg.success_attitude_error_threshold,
+            success_relative_speed_threshold=self.cfg.success_relative_speed_threshold,
         )
+        if step_return.info is not None:
+            self._success_streak = step_return.info["success_streak"].to(
+                dtype=torch.long
+            )
+            self._success_once = step_return.info["is_success"].to(dtype=torch.bool)
+            self._prev_distance_robot_to_target = step_return.info[
+                "distance_robot_to_target"
+            ].to(dtype=torch.float32)
+        return step_return
 
 
 @torch.jit.script
@@ -181,6 +233,7 @@ def _compute_step_return(
     episode_length: torch.Tensor,
     max_episode_length: int,
     truncate_episodes: bool,
+    success_hold_steps: int,
     ## Actions
     act_current: torch.Tensor,
     act_previous: torch.Tensor,
@@ -195,14 +248,24 @@ def _compute_step_return(
     # Transforms (world frame)
     tf_pos_target: torch.Tensor,
     tf_quat_target: torch.Tensor,
+    vel_lin_robot_w: torch.Tensor,
+    vel_lin_target_w: torch.Tensor,
     # IMU
     imu_lin_acc: torch.Tensor,
     imu_ang_vel: torch.Tensor,
     # Fuel
     remaining_fuel: torch.Tensor | None,
+    # Progress
+    prev_distance_robot_to_target: torch.Tensor,
+    # Success
+    prev_success_streak: torch.Tensor,
+    prev_success_once: torch.Tensor,
+    success_distance_threshold: float,
+    success_attitude_error_threshold: float,
+    success_relative_speed_threshold: float,
 ) -> StepReturn:
     num_envs = episode_length.size(0)
-    dtype = episode_length.dtype
+    dtype = tf_pos_robot.dtype
     device = episode_length.device
 
     ############
@@ -224,6 +287,13 @@ def _compute_step_return(
     tf_rot6d_robot_to_target = rotmat_to_rot6d(tf_rotmat_robot_to_target)
 
     distance_robot_to_target = torch.norm(tf_pos_robot_to_target, dim=-1)
+    attitude_error_robot_to_target = quat_error_magnitude(
+        tf_quat_robot,
+        tf_quat_target,
+    )
+    relative_speed_robot_to_target = torch.norm(
+        vel_lin_robot_w - vel_lin_target_w, dim=-1
+    )
 
     ## Fuel
     remaining_fuel = (
@@ -256,21 +326,50 @@ def _compute_step_return(
     )
 
     # Penalty: Distance | Robot <--> Target
+    GOAL_DISTANCE = 1.5
+    MAX_APPROACH_DISTANCE = 30.0
     WEIGHT_DISTANCE_ROBOT_TO_TARGET = -16.0
-    MAX_DISTANCE_ROBOT_TO_TARGET_PENALTY = -128.0
-    penalty_distance_robot_to_target = torch.clamp_min(
-        WEIGHT_DISTANCE_ROBOT_TO_TARGET * torch.square(distance_robot_to_target),
-        min=MAX_DISTANCE_ROBOT_TO_TARGET_PENALTY,
+    distance_error = torch.clamp_min(distance_robot_to_target - GOAL_DISTANCE, 0.0)
+    penalty_distance_robot_to_target = WEIGHT_DISTANCE_ROBOT_TO_TARGET * torch.square(
+        distance_error / MAX_APPROACH_DISTANCE
+    )
+
+    # Reward: Per-step progress toward the target
+    WEIGHT_PROGRESS = 30.0
+    progress_robot_to_target = torch.clamp(
+        prev_distance_robot_to_target - distance_robot_to_target,
+        min=-1.0,
+        max=1.0,
+    )
+    reward_progress_robot_to_target = torch.where(
+        episode_length <= 1,
+        torch.zeros_like(progress_robot_to_target),
+        WEIGHT_PROGRESS * progress_robot_to_target,
+    )
+
+    # Penalty: Attitude error | Robot <--> Target
+    WEIGHT_ATTITUDE_ERROR = -2.0
+    penalty_attitude_error_robot_to_target = WEIGHT_ATTITUDE_ERROR * torch.square(
+        attitude_error_robot_to_target
+    )
+
+    # Penalty: Relative speed, weighted more strongly near the target
+    WEIGHT_RELATIVE_SPEED = -3.0
+    relative_speed_near_weight = torch.exp(-distance_error / 7.0)
+    penalty_relative_speed_robot_to_target = (
+        WEIGHT_RELATIVE_SPEED
+        * relative_speed_near_weight
+        * torch.square(relative_speed_robot_to_target)
     )
 
     # Reward: Distance (linear and angular) | Robot <--> Target (precision rendezvous)
-    WEIGHT_PRECISION_RENDEZVOUS = 256.0
-    TANH_STD_PRECISION_RENDEZVOUS_POS = 0.025
-    TANH_STD_PRECISION_RENDEZVOUS_QUAT = 0.05
+    WEIGHT_PRECISION_RENDEZVOUS = 64.0
+    TANH_STD_PRECISION_RENDEZVOUS_POS = 3.0
+    TANH_STD_PRECISION_RENDEZVOUS_QUAT = 0.5
     reward_precision_rendezvous = WEIGHT_PRECISION_RENDEZVOUS * (
         1.0
         - torch.tanh(
-            (distance_robot_to_target / TANH_STD_PRECISION_RENDEZVOUS_POS)
+            (distance_error / TANH_STD_PRECISION_RENDEZVOUS_POS)
             + (
                 torch.norm(
                     torch.norm(
@@ -284,6 +383,29 @@ def _compute_step_return(
             )
         )
     )
+
+    #############
+    ## Success ##
+    #############
+    success_instant = (
+        (distance_robot_to_target < success_distance_threshold)
+        & (attitude_error_robot_to_target < success_attitude_error_threshold)
+        & (relative_speed_robot_to_target < success_relative_speed_threshold)
+    )
+    success_streak = torch.where(
+        success_instant,
+        prev_success_streak + 1,
+        torch.zeros_like(prev_success_streak),
+    )
+    success_now = success_streak >= success_hold_steps
+    success_new = success_now & ~prev_success_once
+    is_success = prev_success_once | success_now
+
+    # Reward: Success
+    WEIGHT_SUCCESS_INSTANT = 5.0
+    WEIGHT_SUCCESS = 100.0
+    reward_success_instant = WEIGHT_SUCCESS_INSTANT * success_instant.to(dtype)
+    reward_success = WEIGHT_SUCCESS * success_new.to(dtype)
 
     ##################
     ## Terminations ##
@@ -319,8 +441,21 @@ def _compute_step_return(
             "penalty_fuel_consumption": penalty_fuel_consumption,
             "penalty_angular_velocity": penalty_angular_velocity,
             "penalty_distance_robot_to_target": penalty_distance_robot_to_target,
+            "reward_progress_robot_to_target": reward_progress_robot_to_target,
+            "penalty_attitude_error_robot_to_target": penalty_attitude_error_robot_to_target,
+            "penalty_relative_speed_robot_to_target": penalty_relative_speed_robot_to_target,
             "reward_precision_rendezvous": reward_precision_rendezvous,
+            "reward_success_instant": reward_success_instant,
+            "reward_success": reward_success,
         },
         termination,
         truncation,
+        {
+            "is_success": is_success,
+            "success_instant": success_instant,
+            "success_streak": success_streak,
+            "distance_robot_to_target": distance_robot_to_target,
+            "attitude_error_robot_to_target": attitude_error_robot_to_target,
+            "relative_speed_robot_to_target": relative_speed_robot_to_target,
+        },
     )

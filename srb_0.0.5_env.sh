@@ -22,9 +22,10 @@ _prepend_path() {
     local var_name="$1"
     local path_value="$2"
     if [[ -d "${path_value}" ]]; then
-        case ":${!var_name:-}:" in
+        eval "local current_value=\"\${${var_name}:-}\""
+        case ":${current_value}:" in
             *":${path_value}:"*) ;;
-            *) export "${var_name}=${path_value}${!var_name:+:${!var_name}}" ;;
+            *) export "${var_name}=${path_value}${current_value:+:${current_value}}" ;;
         esac
     fi
 }
@@ -57,13 +58,13 @@ if [[ "$#" -eq 0 ]]; then
 [INFO] ISAAC_SIM_PYTHON=${ISAAC_SIM_PYTHON}
 
 Run a command through this wrapper, for example:
-  ${BASH_SOURCE[0]} torch-check
-  ${BASH_SOURCE[0]} srb-ls
-  ${BASH_SOURCE[0]} train-rendezvous
-  ${BASH_SOURCE[0]} -- python -c "import torch; print(torch.__version__)"
+  ${SRB_ROOT}/srb_0.0.5_env.sh torch-check
+  ${SRB_ROOT}/srb_0.0.5_env.sh srb-ls
+  ${SRB_ROOT}/srb_0.0.5_env.sh train-rendezvous
+  ${SRB_ROOT}/srb_0.0.5_env.sh -- python -c "import torch; print(torch.__version__)"
 
 Or source it in the current shell:
-  source ${BASH_SOURCE[0]}
+  source ${SRB_ROOT}/srb_0.0.5_env.sh
 EOF
     return 0 2>/dev/null || exit 0
 fi

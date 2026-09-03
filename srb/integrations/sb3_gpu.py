@@ -237,6 +237,15 @@ class EpisodeEvalVideoCallback(BaseCallback):
 
     def _record_tensorboard_video(self, frames: list[numpy.ndarray]) -> None:
         try:
+            from moviepy import editor as _moviepy_editor  # noqa: F401
+        except ImportError:
+            logging.warning(
+                "Skipping TensorBoard eval video because this environment has "
+                "moviepy>=2 without moviepy.editor; the mp4 eval video is still saved."
+            )
+            return
+
+        try:
             video = torch.as_tensor(numpy.stack(frames), dtype=torch.uint8)
             video = video.permute(0, 3, 1, 2).unsqueeze(0).float() / 255.0
             self.logger.record(
@@ -332,6 +341,7 @@ def run(
     agent_cfg.pop("eval_video_num_envs", 1)
     eval_video_prefix = str(agent_cfg.pop("eval_video_prefix", "eval"))
     concat_eval_videos = bool(agent_cfg.pop("concat_eval_videos", True))
+    agent_cfg.pop("eval_video_camera", None)
     model_device = _select_model_device(
         agent_cfg.pop("policy_device", agent_cfg.pop("device", None)),
         env.unwrapped.device,  # type: ignore
@@ -447,6 +457,9 @@ def run(
                 dtype=bool,
             )
             lstm_states = None
+            target_episodes = max(eval_n_episodes, 1)
+            completed_episodes = 0
+            successful_episodes = 0
 
             obs = env.reset()
             for _ in tqdm(range(agent_cfg["n_timesteps"])):
@@ -458,7 +471,50 @@ def run(
                     episode_start=episode_start,  # type: ignore
                     deterministic=True,
                 )
-                obs, _reward, episode_start, _infos = env.step(action)  # type: ignore
+                obs, _reward, episode_start, infos = env.step(action)  # type: ignore
+
+                for done, info in zip(episode_start, infos):
+                    if not done or not isinstance(info, dict):
+                        continue
+
+                    episode = info.get("episode")
+                    if episode is None:
+                        continue
+
+                    completed_episodes += 1
+                    is_success = bool(
+                        info.get("is_success", episode.get("is_success", 0.0))
+                    )
+                    successful_episodes += int(is_success)
+                    success_rate = successful_episodes / completed_episodes
+                    logging.info(
+                        "Eval progress: "
+                        f"trajectories={completed_episodes}/{target_episodes}, "
+                        f"successes={successful_episodes}, "
+                        f"success_rate={100.0 * success_rate:.2f}%"
+                    )
+
+                    if completed_episodes >= target_episodes:
+                        break
+
+                if completed_episodes >= target_episodes:
+                    break
+
+            if completed_episodes < target_episodes:
+                logging.warning(
+                    "Eval stopped before reaching the requested trajectory count: "
+                    f"completed={completed_episodes}/{target_episodes}, "
+                    f"successes={successful_episodes}. Increase agent.n_timesteps "
+                    "or check whether the simulator was stopped."
+                )
+            else:
+                logging.info(
+                    "Eval complete: "
+                    f"trajectories={completed_episodes}, "
+                    f"successes={successful_episodes}, "
+                    "success_rate="
+                    f"{100.0 * successful_episodes / completed_episodes:.2f}%"
+                )
 
 
 def gc_tqdm(*args):

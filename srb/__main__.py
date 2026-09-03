@@ -127,7 +127,7 @@ def run_agent_with_env(
     from omni.physx import acquire_physx_interface
 
     from srb.interfaces.teleop import EventOmniKeyboardTeleopInterface
-    from srb.utils.cfg import last_logdir, new_logdir
+    from srb.utils.cfg import last_logdir, new_logdir, stamp_dir
     from srb.utils.hydra.sim import hydra_task_config
     from srb.utils.isaacsim import hide_isaacsim_ui
 
@@ -186,8 +186,9 @@ def run_agent_with_env(
         )
         render_enable = video_enable or sb3_gpu_eval_video_enable
 
+        video_camera_cfg = {}
         if render_enable:
-            __configure_video_scene(env_cfg)
+            video_camera_cfg = __configure_video_scene(env_cfg, agent_cfg)
 
         # Create the environment and initialize it
         env = gymnasium.make(
@@ -197,15 +198,24 @@ def run_agent_with_env(
 
         # Add wrapper for video recording
         if sb3_gpu_eval_video_enable and not video_enable:
-            env = __wrap_env_in_video_lighting(env)
+            env = __wrap_env_in_video_lighting(env, video_camera_cfg)
         if video_enable:
-            env = __wrap_env_in_video_lighting(env)
-            env = gymnasium.wrappers.RecordVideo(
-                env,
-                video_folder=logdir.joinpath("videos").as_posix(),
-                name_prefix=env_id.rsplit("/", 1)[-1],
-                disable_logger=True,
-            )
+            env = __wrap_env_in_video_lighting(env, video_camera_cfg)
+            video_folder = logdir.joinpath("videos")
+            if agent_subcommand == "eval":
+                video_folder = stamp_dir(logdir.joinpath("eval_videos"))
+                env = __wrap_env_in_streaming_video(
+                    env,
+                    video_folder=video_folder,
+                    name_prefix=env_id.rsplit("/", 1)[-1],
+                )
+            else:
+                env = gymnasium.wrappers.RecordVideo(
+                    env,
+                    video_folder=video_folder.as_posix(),
+                    name_prefix=env_id.rsplit("/", 1)[-1],
+                    disable_logger=True,
+                )
 
         # Add wrapper for performance tests
         if perf_enable:
@@ -1801,10 +1811,86 @@ def __wrap_env_in_performance_test(
     return PerformanceTestWrapper(env, output=perf_output, duration=perf_duration)
 
 
-def __configure_video_scene(env_cfg):
+_RENDEZVOUS_VIDEO_CAMERA_DEFAULTS = {
+    "eye": (15.0, -24.0, 12.0),
+    "lookat": (15.0, 0.0, 0.25),
+    "origin_type": "env",
+    "resolution": (1280, 720),
+    "focal_length": 16.0,
+    "horizontal_aperture": 24.0,
+    "clipping_range": (0.1, 80.0),
+}
+
+
+def __is_rendezvous_env_cfg(env_cfg) -> bool:
+    return env_cfg.__class__.__module__.endswith(".rendezvous.task")
+
+
+def _cfg_tuple(
+    cfg: Mapping[str, Any],
+    key: str,
+    fallback: Sequence[float | int],
+    *,
+    length: int,
+    cast: type = float,
+) -> tuple:
+    value = cfg.get(key, fallback)
+    if value is None:
+        value = fallback
+    result = tuple(cast(item) for item in value)
+    if len(result) != length:
+        raise ValueError(
+            f'Expected video camera "{key}" to contain {length} values, got {result}.'
+        )
+    return result
+
+
+def __video_camera_cfg(
+    env_cfg,
+    agent_cfg: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    cfg: dict[str, Any] = {}
+    if __is_rendezvous_env_cfg(env_cfg):
+        cfg.update(_RENDEZVOUS_VIDEO_CAMERA_DEFAULTS)
+
+    raw_cfg = (agent_cfg or {}).get("eval_video_camera")
+    if raw_cfg is False:
+        return {}
+    if raw_cfg:
+        if not isinstance(raw_cfg, Mapping):
+            raise TypeError(
+                f"Expected agent.eval_video_camera to be a mapping, got {type(raw_cfg)}."
+            )
+        cfg.update({key: value for key, value in raw_cfg.items() if value is not None})
+    return cfg
+
+
+def __configure_video_scene(
+    env_cfg,
+    agent_cfg: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     from srb.core.asset import AssetBaseCfg
     from srb.core.sim import DistantLightCfg, DomeLightCfg
     from srb.utils.math import rpy_to_quat
+
+    video_camera_cfg = __video_camera_cfg(env_cfg, agent_cfg)
+    if video_camera_cfg:
+        env_cfg.viewer.eye = _cfg_tuple(
+            video_camera_cfg, "eye", env_cfg.viewer.eye, length=3
+        )
+        env_cfg.viewer.lookat = _cfg_tuple(
+            video_camera_cfg, "lookat", env_cfg.viewer.lookat, length=3
+        )
+        env_cfg.viewer.origin_type = str(
+            video_camera_cfg.get("origin_type", env_cfg.viewer.origin_type)
+        )
+        env_cfg.viewer.resolution = _cfg_tuple(
+            video_camera_cfg,
+            "resolution",
+            env_cfg.viewer.resolution,
+            length=2,
+            cast=int,
+        )
 
     scene = getattr(env_cfg, "scene", None)
     if scene is not None:
@@ -1848,15 +1934,23 @@ def __configure_video_scene(env_cfg):
         render.enable_ambient_occlusion = False
         render.samples_per_pixel = 1
 
+    return video_camera_cfg
 
-def __wrap_env_in_video_lighting(env: "AnyEnv") -> "AnyEnv":
+
+def __wrap_env_in_video_lighting(
+    env: "AnyEnv",
+    video_camera_cfg: Mapping[str, Any] | None = None,
+) -> "AnyEnv":
     import gymnasium
     import torch
+
+    video_camera_cfg = dict(video_camera_cfg or {})
 
     class VideoLightingWrapper(gymnasium.Wrapper):
         def reset(self, *args, **kwargs):
             reset_return = super().reset(*args, **kwargs)
             self._set_video_key_light()
+            self._set_video_camera_intrinsics()
             return reset_return
 
         def _set_video_key_light(self):
@@ -1902,7 +1996,148 @@ def __wrap_env_in_video_lighting(env: "AnyEnv") -> "AnyEnv":
                 translate_op = xformable.AddTranslateOp()
             translate_op.Set(Gf.Vec3d(*eye.tolist()))
 
+        def _set_video_camera_intrinsics(self):
+            from pxr import UsdGeom
+
+            unwrapped = self.unwrapped
+            if not video_camera_cfg:
+                return
+
+            sim = getattr(unwrapped, "sim", None)
+            if sim is None:
+                return
+
+            camera_path = unwrapped.cfg.viewer.cam_prim_path
+            camera_prim = sim.stage.GetPrimAtPath(camera_path)
+            if not camera_prim.IsValid() or not camera_prim.IsA(UsdGeom.Camera):
+                return
+
+            camera = UsdGeom.Camera(camera_prim)
+            width, height = unwrapped.cfg.viewer.resolution
+            current_focal_length = camera.GetFocalLengthAttr().Get()
+            current_horizontal_aperture = camera.GetHorizontalApertureAttr().Get()
+            focal_length = float(
+                video_camera_cfg.get(
+                    "focal_length",
+                    current_focal_length if current_focal_length is not None else 24.0,
+                )
+            )
+            horizontal_aperture = float(
+                video_camera_cfg.get(
+                    "horizontal_aperture",
+                    current_horizontal_aperture
+                    if current_horizontal_aperture is not None
+                    else 20.955,
+                )
+            )
+            vertical_aperture = float(
+                video_camera_cfg.get(
+                    "vertical_aperture",
+                    horizontal_aperture * (float(height) / float(width)),
+                )
+            )
+            clipping_range = _cfg_tuple(
+                video_camera_cfg,
+                "clipping_range",
+                camera.GetClippingRangeAttr().Get() or (0.01, 1.0e6),
+                length=2,
+            )
+
+            camera.GetFocalLengthAttr().Set(focal_length)
+            camera.GetHorizontalApertureAttr().Set(horizontal_aperture)
+            camera.GetVerticalApertureAttr().Set(vertical_aperture)
+            camera.GetClippingRangeAttr().Set(clipping_range)
+
     return VideoLightingWrapper(env)  # type: ignore
+
+
+def __wrap_env_in_streaming_video(
+    env: "AnyEnv",
+    *,
+    video_folder: Path,
+    name_prefix: str,
+) -> "AnyEnv":
+    import imageio.v2 as imageio
+    import gymnasium
+    import numpy
+    import torch
+
+    from srb.utils import logging
+
+    video_folder.mkdir(parents=True, exist_ok=True)
+
+    class StreamingVideoWrapper(gymnasium.Wrapper):
+        def __init__(self, wrapped_env):
+            super().__init__(wrapped_env)
+            self._episode_id = 0
+            self._writer = None
+
+        def reset(self, *args, **kwargs):
+            reset_return = super().reset(*args, **kwargs)
+            self._close_writer()
+            self._start_writer()
+            self._append_frame()
+            return reset_return
+
+        def step(self, action):
+            # Isaac Lab resets completed vector environments internally, so start the
+            # next episode's writer before its first action when no writer is open.
+            if self._writer is None:
+                self._start_writer()
+                self._append_frame()
+
+            step_return = super().step(action)
+            _, _, terminated, truncated, _ = step_return
+            self._append_frame()
+
+            if self._env_done(terminated) or self._env_done(truncated):
+                self._close_writer()
+                self._episode_id += 1
+
+            return step_return
+
+        def close(self):
+            self._close_writer()
+            return super().close()
+
+        def _start_writer(self):
+            fps = int((getattr(self.env, "metadata", {}) or {}).get("render_fps", 20))
+            video_path = video_folder.joinpath(
+                f"{name_prefix}-episode-{self._episode_id:04d}.mp4"
+            )
+            self._writer = imageio.get_writer(video_path.as_posix(), fps=fps)
+            self._video_path = video_path
+
+        def _append_frame(self):
+            frame = self.env.render()
+            if isinstance(frame, (list, tuple)):
+                frame = frame[-1] if frame else None
+            if frame is None:
+                return
+
+            frame = numpy.asarray(frame)
+            if frame.ndim != 3:
+                return
+            if frame.dtype != numpy.uint8:
+                frame = numpy.clip(frame, 0, 255).astype(numpy.uint8)
+            if frame.shape[-1] == 4:
+                frame = frame[..., :3]
+            self._writer.append_data(frame)
+
+        @staticmethod
+        def _env_done(value) -> bool:
+            if isinstance(value, torch.Tensor):
+                return bool(value.flatten()[0].item())
+            return bool(numpy.asarray(value).reshape(-1)[0])
+
+        def _close_writer(self):
+            if self._writer is None:
+                return
+            self._writer.close()
+            logging.info(f"Saved eval video: {self._video_path}")
+            self._writer = None
+
+    return StreamingVideoWrapper(env)  # type: ignore
 
 
 ### CLI ###
