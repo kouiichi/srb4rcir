@@ -950,11 +950,11 @@ dependencies = [
 
 [[package]]
 name = "ecolor"
-version = "0.36.1"
+version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc883f505d446814c0226bef4b64564b9adb9966fc00c88c57ce6d827dd152d6"
+checksum = "0656a7530b9e2841ee7a5f983965bdd9840c32f4012f759cfd44b912cced6b34"
 dependencies = [
- "emath 0.36.1",
+ "emath 0.36.2",
 ]
 
 [[package]]
@@ -1035,15 +1035,15 @@ dependencies = [
 
 [[package]]
 name = "egui"
-version = "0.36.1"
+version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c977ac91dfaa651633fd9722e4ce9ccb32cda4c748b89a5cb57e504036e37c13"
+checksum = "dc938cc27cd911415e1e4d151bc56ff9df063d8db081374e87aeb805ea74b2ba"
 dependencies = [
  "accesskit 0.24.1",
  "ahash",
  "bitflags 2.13.0",
- "emath 0.36.1",
- "epaint 0.36.1",
+ "emath 0.36.2",
+ "epaint 0.36.2",
  "itertools 0.15.0",
  "log",
  "nohash-hasher",
@@ -1080,7 +1080,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19e757b2a0639f5f75793e6936ad4c86e8b58ee379d23578ad6924ba9f75ec38"
 dependencies = [
- "egui 0.36.1",
+ "egui 0.36.2",
  "egui_commonmark_backend",
  "egui_commonmark_macros",
  "egui_extras 0.36.1",
@@ -1093,7 +1093,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67e182e6b923b0ade1152f67e7d827cbc266fca7782d50249de0c4cad1a2a4e5"
 dependencies = [
- "egui 0.36.1",
+ "egui 0.36.2",
  "egui_extras 0.36.1",
  "pulldown-cmark",
  "syntect",
@@ -1105,7 +1105,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d2de7f9ac5b775ec570f49a1a7b3816a6dc5e1046e69e6e452df5ea7b654806"
 dependencies = [
- "egui 0.36.1",
+ "egui 0.36.2",
  "egui_commonmark_backend",
  "proc-macro-crate",
  "proc-macro2",
@@ -1139,7 +1139,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e651e08ddf6bb8bfd964ad70e33bc721c093f2b77ab59580e7140c008dab68c"
 dependencies = [
  "ahash",
- "egui 0.36.1",
+ "egui 0.36.2",
  "enum-map",
  "itertools 0.15.0",
  "log",
@@ -1201,9 +1201,9 @@ checksum = "b53f0d33a479321da6b0caa71366c9f67e8a2c149762d90bdc0d16e601ee8ecb"
 
 [[package]]
 name = "emath"
-version = "0.36.1"
+version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce03cf1604f74515830012c29991beb0b58f69e4e43f5afe22fa7afed65ccd5"
+checksum = "52c8d4141cf0f60fb2f7aefaf352d3ffa5171ef0ab09731c64391801e95e48f1"
 
 [[package]]
 name = "endi"
@@ -1303,13 +1303,13 @@ dependencies = [
 
 [[package]]
 name = "epaint"
-version = "0.36.1"
+version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11863a6b2b7823010c1090ddf4706947bdda46766742def0673195cbf7ff4a73"
+checksum = "a0ec0308dc23130fc1a7d4623a8534c2ed069c6dc84e258ee4f3de99615aa1a3"
 dependencies = [
  "ahash",
- "ecolor 0.36.1",
- "emath 0.36.1",
+ "ecolor 0.36.2",
+ "emath 0.36.2",
  "font-types 0.12.4",
  "harfrust",
  "log",
@@ -3688,7 +3688,7 @@ dependencies = [
  "const_format",
  "display_json",
  "eframe",
- "egui 0.36.1",
+ "egui 0.36.2",
  "egui_commonmark",
  "egui_extras 0.34.3",
  "glob",
