@@ -1,0 +1,11 @@
+# Optional NMPC data-output support.  Install only into third_party/python:
+#
+# ./srb_0.0.5_env.sh -- /home/ubuntu/isaac-sim-4.5/python.sh -m pip \
+#   install --no-deps --only-binary=:all: \
+#   --target "$SRB_ROOT/third_party/python" \
+#   -r requirements-nmpc-isolated.txt
+#
+# The runtime already supplies NumPy and pandas.  Do not let pip resolve or
+# upgrade the Isaac Sim dependency set for this isolated optional package.
+pyarrow==18.1.0
+Cython==3.0.12

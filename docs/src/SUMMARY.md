@@ -32,6 +32,7 @@ ______________________________________________________________________
   - [ROS 2](workflows/ros2.md)
   - [Reinforcement Learning](workflows/reinforcement_learning.md)
   - [Imitation Learning](<>)
+  - [20 Hz NMPC expert](workflows/nmpc.md)
   - [Sim-to-Real Transfer](workflows/sim_to_real.md)
 
 # Configuration

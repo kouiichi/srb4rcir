@@ -88,6 +88,7 @@ class ThrustAction(ActionTerm):
             self._asset.root_physx_view.get_masses().to(device=env.device).clone()
         )
         self._physx_tensor_device = self._asset.root_physx_view.get_masses().device
+        self.external_acceleration_B: torch.Tensor | None = None
 
         ## Set up visualization markers
         if self.cfg.debug_vis:
@@ -163,6 +164,12 @@ class ThrustAction(ActionTerm):
             -self.cfg.scale * thrust_magnitudes.unsqueeze(-1) * thruster_directions
             # / self._env.cfg.agent_rate
         )
+        current_masses = self._asset.root_physx_view.get_masses().to(device=self.device)
+        if self.external_acceleration_B is not None:
+            acceleration = self.external_acceleration_B.to(device=self.device)
+            if acceleration.ndim == 1:
+                acceleration = acceleration.unsqueeze(0).expand(self.num_envs, -1)
+            thruster_forces = thruster_forces + acceleration.unsqueeze(1) * current_masses.unsqueeze(-1).unsqueeze(-1)
 
         ## Get center of mass positions [num_envs, 3]
         thruster_offsets = self._thruster_offset.unsqueeze(0).expand(
@@ -319,3 +326,4 @@ class ThrustActionCfg(ActionTermCfg):
     thrusters: Sequence[ThrusterCfg] = (ThrusterCfg(),)
     fuel_capacity: float = 1.0
     fuel_consumption_rate: float = 0.1
+    external_acceleration_B: torch.Tensor | None = None

@@ -32,6 +32,31 @@
 
 SRB documentation with detailed installation instructions, usage guides, and development resources is available [online](https://AndrejOrsula.github.io/space_robotics_bench).
 
+## 20 Hz NMPC expert
+
+The standalone privileged expert is under `srb/nmpc/`.  It uses a 13-state
+HCW/CW plus quaternion rigid-body model, a full-rank 16-channel one-sided RCS,
+`CasADi+IPOPT` for the high-accuracy oracle, and `acados+HPIPM` for the
+production backend.  The global grid is 20 Hz (`Ts=0.05 s`, `N=20`, five
+`0.01 s` RK4 substeps, `K=8` action blocks).
+
+Run the checks through the SRB wrapper:
+
+```bash
+./srb_0.0.5_env.sh -- /home/ubuntu/isaac-sim-4.5/python.sh scripts/validate_rcs.py
+./srb_0.0.5_env.sh -- /home/ubuntu/isaac-sim-4.5/python.sh scripts/smoke_test.py --config configs/default.yaml
+```
+
+The current SRB Cubesat remains an explicitly labelled rank-5, eight-thruster
+contrast adapter; it is not used to create the main 6-D expert labels.  See
+`third_party/acados/` and `srb/nmpc/THIRD_PARTY_NOTICES.md` for the pinned solver build
+and license provenance.
+
+An opt-in `srb/rendezvous_16rcs` task uses the canonical full-rank 16-channel
+RCS configuration.  It fixes the actuator-rank mismatch while preserving the
+legacy 8-thruster task for contrast; SRB's current rendezvous physics remains
+zero-gravity, so HCW/CW expert trajectories continue to come from `srb/nmpc/`.
+
 <div align="right">
 <a href="https://AndrejOrsula.github.io/space_robotics_bench"><img alt="Documentation" src="https://github.com/user-attachments/assets/c8663796-3ef1-4ff7-860b-cf8080d0a07a" width="96" height="96"></a>
 </div>

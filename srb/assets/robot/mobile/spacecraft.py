@@ -1,3 +1,5 @@
+from math import sqrt
+
 import simforge_foundry
 
 from srb.core.action import (
@@ -19,6 +21,59 @@ from srb.core.sim import (
 )
 from srb.utils.math import deg_to_rad, rpy_to_quat
 from srb.utils.path import SRB_ASSETS_DIR_SRB_ROBOT
+
+
+_NMPC_RCS_TMAX_N = 0.1
+
+
+def _nmpc_full_rank_thrusters() -> tuple[ThrusterCfg, ...]:
+    """Return the canonical 16-RCS geometry in SRB's thrust-vector convention.
+
+    The NMPC contract defines ``fhat`` as the force direction, whereas SRB's
+    ``ThrustAction`` applies ``-power * direction``.  The configured direction
+    is consequently ``-fhat`` so that the force actually applied by PhysX is
+    the contract force.  The order is ``[11+, 11-, 12+, 12-, ..., 42+, 42-]``.
+    """
+
+    sqrt2 = sqrt(2.0)
+    sqrt3 = sqrt(3.0)
+    sqrt6 = sqrt(6.0)
+    bays = (
+        (1.0 / sqrt3, 1.0 / sqrt3, 1.0 / sqrt3),
+        (1.0 / sqrt3, -1.0 / sqrt3, -1.0 / sqrt3),
+        (-1.0 / sqrt3, 1.0 / sqrt3, -1.0 / sqrt3),
+        (-1.0 / sqrt3, -1.0 / sqrt3, 1.0 / sqrt3),
+    )
+    reflections = (
+        (1.0, 1.0, 1.0),
+        (1.0, -1.0, -1.0),
+        (-1.0, 1.0, -1.0),
+        (-1.0, -1.0, 1.0),
+    )
+    a0 = (1.0 / sqrt2, -1.0 / sqrt2, 0.0)
+    b0 = (1.0 / sqrt6, 1.0 / sqrt6, -2.0 / sqrt6)
+    thrusters: list[ThrusterCfg] = []
+    for bay, reflection in zip(bays, reflections):
+        for tangent in (a0, b0):
+            e = tuple(sign * value for sign, value in zip(reflection, tangent))
+            plus_position = tuple(0.30 * value - 0.05 * direction for value, direction in zip(bay, e))
+            minus_position = tuple(0.30 * value + 0.05 * direction for value, direction in zip(bay, e))
+            # Actual SRB force is -power * direction.
+            thrusters.extend(
+                (
+                    ThrusterCfg(
+                        offset=plus_position,
+                        direction=tuple(-value for value in e),
+                        power=_NMPC_RCS_TMAX_N,
+                    ),
+                    ThrusterCfg(
+                        offset=minus_position,
+                        direction=e,
+                        power=_NMPC_RCS_TMAX_N,
+                    ),
+                )
+            )
+    return tuple(thrusters)
 
 
 class Gateway(OrbitalRobot):
@@ -161,6 +216,28 @@ class Cubesat(OrbitalRobot):
             pos=(0.075, 0.0, 0.0),
             rot=rpy_to_quat(0.0, 0.0, 0.0),
         ),
+    )
+
+
+class Cubesat16Rcs(Cubesat):
+    """Opt-in Cubesat variant with the canonical full-rank 16-channel RCS.
+
+    The original :class:`Cubesat` and all existing SRB tasks retain their
+    eight-thruster behavior.  This variant reuses the same visual/rigid asset
+    but changes only the action geometry, allowing the NMPC 16-duty labels to
+    be executed in SRB without projecting them through the rank-5 legacy map.
+    The visual model does not claim that these abstract actuator lines are
+    modeled as separate mesh parts; their force application and torque arms
+    are explicit in ``ThrustAction``.
+    """
+
+    actions: ActionGroup = ThrustActionGroup(
+        ThrustActionCfg(
+            asset_name="robot",
+            thrusters=_nmpc_full_rank_thrusters(),
+            fuel_capacity=5.0,
+            fuel_consumption_rate=(5.0 / (16 * _NMPC_RCS_TMAX_N)) / 20.0,
+        )
     )
 
 

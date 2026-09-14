@@ -1,0 +1,4 @@
+# pyarrow is a host-specific binary wheel installed outside the source tree.
+# Recreate it with requirements-nmpc-isolated.txt instead of committing it.
+*
+!.gitignore

@@ -15,6 +15,7 @@ from .perseverance import Perseverance  # noqa: F401
 from .pragyan import Pragyan  # noqa: F401
 from .spacecraft import (  # noqa: F401
     Cubesat,
+    Cubesat16Rcs,
     Gateway,
     Starship,
     SuperHeavy,

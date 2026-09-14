@@ -5,7 +5,7 @@ import torch
 from srb import assets
 from srb._typing import StepReturn
 from srb.core.action import ThrustAction
-from srb.core.asset import RigidObject, RigidObjectCfg
+from srb.core.asset import OrbitalRobot, RigidObject, RigidObjectCfg
 from srb.core.env import (
     OrbitalEnv,
     OrbitalEnvCfg,
@@ -89,6 +89,8 @@ class TaskCfg(OrbitalEnvCfg):
     ## Target offset
     target_offset_pos: Tuple[float, float, float] = (0.0, 0.0, 0.5)
     target_offset_quat: Tuple[float, float, float, float] = rpy_to_quat(0.0, 90.0, 0.0)
+    orbital_tidal_acceleration: bool = False
+    mean_motion_rad_s: float = 0.001027
 
     ## Success criteria
     success_distance_threshold: float = 1
@@ -114,6 +116,13 @@ class TaskCfg(OrbitalEnvCfg):
         # Scene: Target
         if isinstance(self.scene.target.spawn, SimforgeAssetCfg):
             self.scene.target.spawn.seed = self.seed + self.scene.num_envs
+
+
+@configclass
+class Task16RcsCfg(TaskCfg):
+    """Rendezvous configuration using the canonical full-rank SRB RCS."""
+
+    robot: OrbitalRobot = assets.Cubesat16Rcs()
 
 
 ############
@@ -224,6 +233,44 @@ class Task(OrbitalEnv):
                 "distance_robot_to_target"
             ].to(dtype=torch.float32)
         return step_return
+
+
+class Task16Rcs(Task):
+    """Rendezvous task variant with 16 executable one-sided RCS channels.
+
+    The default ``srb/rendezvous`` task is intentionally unchanged and keeps
+    the legacy eight-thruster contrast.  This class is registered separately
+    so experiments must opt in explicitly when they need a full-rank action
+    interface.
+    """
+
+    cfg: Task16RcsCfg
+
+    def _apply_action(self):
+        """Apply optional circular-orbit tidal acceleration in the task axes.
+
+        This is an opt-in experimental hook.  The default task remains the
+        validated free-floating SRB environment.
+        """
+        term = self.action_manager._terms.get(self._thrust_action_term_key)
+        accel = getattr(self.cfg, "orbital_tidal_acceleration", False)
+        if term is not None and accel:
+            import torch
+            n = float(getattr(self.cfg, "mean_motion_rad_s", 0.001027))
+            t = float(self.sim.current_time)
+            angle = n * t
+            c, s = torch.cos(torch.tensor(angle, device=self.device)), torch.sin(torch.tensor(angle, device=self.device))
+            R = torch.stack((torch.stack((c, -s, c*0)), torch.stack((s, c, c*0)), torch.tensor([0.,0.,1.], device=self.device)))
+            pos = self._robot.data.root_pos_w - self._target.data.root_pos_w
+            p = torch.bmm(R.T.expand(self.num_envs,3,3), pos.unsqueeze(-1)).squeeze(-1)
+            local = n*n * p * torch.tensor([2., -1., -1.], device=self.device)
+            world = torch.bmm(R.expand(self.num_envs,3,3), local.unsqueeze(-1)).squeeze(-1)
+            q = self._robot.data.root_quat_w
+            from srb.utils.math import quat_apply_inverse
+            term.external_acceleration_B = quat_apply_inverse(q, world)
+        elif term is not None:
+            term.external_acceleration_B = None
+        super()._apply_action()
 
 
 @torch.jit.script

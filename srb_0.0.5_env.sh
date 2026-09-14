@@ -7,6 +7,8 @@ export ISAAC_SIM_PYTHON="${ISAAC_SIM_PATH}/python.sh"
 export ISAAC_ML_PREBUNDLE="${ISAAC_SIM_PATH}/exts/omni.isaac.ml_archive/pip_prebundle"
 export BLENDER_PATH="/home/ubuntu/blender-4.3.2-linux-x64"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/srb_0.0.5_matplotlib}"
+export ACADOS_SOURCE_DIR="${ACADOS_SOURCE_DIR:-${SRB_ROOT}/third_party/acados}"
+export NMPC_PYTHON_SUPPORT_DIR="${SRB_ROOT}/third_party/python"
 
 if [[ ! -x "${ISAAC_SIM_PYTHON}" ]]; then
     echo "[ERROR] ISAAC_SIM_PYTHON is not executable: ${ISAAC_SIM_PYTHON}" >&2
@@ -32,6 +34,7 @@ _prepend_path() {
 
 _prepend_path PATH "${ISAAC_SIM_PATH}/kit/python/bin"
 _prepend_path PATH "${BLENDER_PATH}"
+_prepend_path PYTHONPATH "${NMPC_PYTHON_SUPPORT_DIR}"
 mkdir -p "${MPLCONFIGDIR}"
 
 for lib_dir in \
@@ -48,6 +51,7 @@ for lib_dir in \
 do
     _prepend_path LD_LIBRARY_PATH "${lib_dir}"
 done
+_prepend_path LD_LIBRARY_PATH "${ACADOS_SOURCE_DIR}/lib"
 
 cd "${SRB_ROOT}"
 
