@@ -38,3 +38,8 @@ wandb/
 
 ## Dump files
 **/core.*
+
+/docs/superpowers
+/scripts/archive
+/tests/archive
+spacerobot_env

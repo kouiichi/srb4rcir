@@ -41,6 +41,7 @@ def koz_terms(
     task_params: TaskParams,
     *,
     rcs_matrix: FloatArray | None = None,
+    mass_kg: float | None = None,
 ) -> tuple[float, float, float, float]:
     """Return ``h``, ``h_dot``, ``h_ddot`` and ECBF margin for one stage.
 
@@ -61,7 +62,7 @@ def koz_terms(
     if matrix.shape != (6, 16) or not np.all(np.isfinite(matrix)):
         raise ValueError("rcs_matrix must be a finite shape-(6,16) array")
     acceleration = cw_acceleration(x[:3], x[3:6], task_params.mean_motion_rad_s)
-    acceleration += quaternion_to_rotation(x[6:10]) @ (matrix[:3] @ u) / task_params.mass_kg
+    acceleration += quaternion_to_rotation(x[6:10]) @ (matrix[:3] @ u) / (task_params.mass_kg if mass_kg is None else mass_kg)
     h_ddot = float(2.0 * np.dot(x[3:6], x[3:6]) + 2.0 * np.dot(offset, acceleration))
     ecbf = (
         h_ddot
@@ -109,6 +110,8 @@ def constraint_margins(
     reference_states: npt.ArrayLike | None = None,
     *,
     dynamics_rollout: npt.ArrayLike | None = None,
+    stage_masses: npt.ArrayLike | None = None,
+    stage_fuel: npt.ArrayLike | None = None,
 ) -> dict[str, float]:
     """Recompute every hard margin from a candidate trajectory.
 
@@ -155,7 +158,9 @@ def constraint_margins(
         if not np.isclose(np.linalg.norm(state[6:10]), 1.0, atol=1.0e-8):
             attitude_values.append(-np.inf)
         if index < duties.shape[0]:
-            h, _, _, ecbf = koz_terms(state, duties[index], task_params, rcs_matrix=matrix)
+            available_duty = duties[index] if stage_fuel is None or stage_fuel[index] > 0 else np.zeros(16)
+            h, _, _, ecbf = koz_terms(state, available_duty, task_params, rcs_matrix=matrix,
+                                     mass_kg=None if stage_masses is None else stage_masses[index])
             ecbf_values.append(ecbf)
             expected_next = (
                 rk4_step(state, duties[index], task_params, rcs_matrix=matrix)
@@ -240,6 +245,8 @@ def validate_solution(
     tolerance: float = 1.0e-6,
     reference_states: npt.ArrayLike | None = None,
     dynamics_rollout: npt.ArrayLike | None = None,
+    stage_masses: npt.ArrayLike | None = None,
+    stage_fuel: npt.ArrayLike | None = None,
 ) -> tuple[bool, dict[str, float], str | None]:
     """Return ``(accepted, margins, reason)`` after independent validation."""
 
@@ -251,6 +258,8 @@ def validate_solution(
             previous_duty,
             reference_states,
             dynamics_rollout=dynamics_rollout,
+            stage_masses=stage_masses,
+            stage_fuel=stage_fuel,
         )
     except (ValueError, FloatingPointError) as exc:
         return False, {"validation_error": np.nan}, str(exc)

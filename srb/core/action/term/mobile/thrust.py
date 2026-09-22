@@ -87,8 +87,14 @@ class ThrustAction(ActionTerm):
         self._dry_masses = (
             self._asset.root_physx_view.get_masses().to(device=env.device).clone()
         )
+        # Keep an immutable dry inertia baseline. Reset must not repeatedly
+        # scale the already wet (or fuel-depleted) inertia.
+        self._dry_inertias = (
+            self._asset.root_physx_view.get_inertias().to(device=env.device).clone()
+        )
         self._physx_tensor_device = self._asset.root_physx_view.get_masses().device
         self.external_acceleration_B: torch.Tensor | None = None
+        self._restore_wet_properties(self._asset._ALL_INDICES)
 
         ## Set up visualization markers
         if self.cfg.debug_vis:
@@ -185,6 +191,18 @@ class ThrustAction(ActionTerm):
         ## Calculate torques resulting from thruster forces
         thruster_torques = torch.cross(thruster_offsets_com, thruster_forces, dim=2)
 
+        # Opt-in experiment telemetry: capture the exact tensors submitted to
+        # PhysX, before mass/inertia setters change the executor state.
+        if getattr(self, "record_execution", False):
+            self.last_execution = {
+                "force_B": thruster_forces.sum(dim=1).detach().clone(),
+                "torque_B": thruster_torques.sum(dim=1).detach().clone(),
+                "mass_before": current_masses.detach().clone(),
+                "inertia_before": self._asset.root_physx_view.get_inertias().detach().clone(),
+                "fuel_before": self._remaining_fuel.detach().clone(),
+                "duty": thrust_actions.detach().clone(),
+            }
+
         ## Apply forces and torques at center of mass in the local frame
         self._asset.root_physx_view.apply_forces_and_torques_at_position(
             force_data=thruster_forces.sum(dim=1).to(device=self._physx_tensor_device),
@@ -217,6 +235,12 @@ class ThrustAction(ActionTerm):
             ),
             indices=self._asset._ALL_INDICES.to(device=self._physx_tensor_device),
         )
+        if getattr(self, "record_execution", False):
+            self.last_execution.update({
+                "mass_after": masses.detach().clone(),
+                "inertia_after": self._asset.root_physx_view.get_inertias().detach().clone(),
+                "fuel_after": self._remaining_fuel.detach().clone(),
+            })
 
         ## Update visualization markers
         if self.cfg.debug_vis:
@@ -306,9 +330,31 @@ class ThrustAction(ActionTerm):
                 thruster_pos_w, thrust_dir_quat_w, marker_scale
             )
 
+    def _restore_wet_properties(self, env_ids):
+        """Synchronize PhysX with fuel before any episode force is submitted.
+
+        Preserve SRB's existing inertia-proportional-to-mass approximation;
+        no new tank geometry or COM shift is implied by this repair.
+        PhysX setters receive full buffers and update only selected indices.
+        """
+        masses = self._dry_masses + self._remaining_fuel.unsqueeze(-1)
+        inertias = self._dry_inertias * (masses / self._dry_masses)
+        indices = torch.as_tensor(env_ids, dtype=torch.long, device=self._physx_tensor_device)
+        if indices.numel() == 0:
+            return
+        self._asset.root_physx_view.set_masses(
+            masses.to(device=self._physx_tensor_device), indices=indices
+        )
+        self._asset.root_physx_view.set_inertias(
+            inertias.to(device=self._physx_tensor_device), indices=indices
+        )
+
     def reset(self, env_ids: Sequence[int] | None = None):
         super().reset(env_ids)
+        if env_ids is None:
+            env_ids = self._asset._ALL_INDICES
         self._remaining_fuel[env_ids] = self.cfg.fuel_capacity
+        self._restore_wet_properties(env_ids)
 
 
 class ThrusterCfg(BaseModel):

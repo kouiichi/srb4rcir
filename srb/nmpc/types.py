@@ -60,9 +60,9 @@ class TaskParams:
     experimental assumptions, not measured vehicle specifications.
 
     The global SRB timing contract is 20 Hz: one control period is 0.05 s,
-    the horizon has 20 intervals (1 s), and each interval is integrated with
-    five 0.01 s RK4 substeps.  ``action_block_lengths`` is the fixed K=8
-    rolling action-block interface; the optimizer still solves every interval.
+    the default horizon has 20 intervals (1 s), and each interval is integrated
+    with five 0.01 s RK4 substeps. ``action_block_lengths`` defaults to K=8;
+    alternative horizons must supply positive integer blocks covering them.
     """
 
     control_period_s: float = 0.05
@@ -186,8 +186,10 @@ class TaskParams:
             raise ValueError("control_period_s must equal rk4_substeps*rk4_substep_dt_s")
         if not np.isclose(self.control_period_s, 0.05, rtol=0.0, atol=1.0e-12):
             raise ValueError("the SRB NMPC timing contract requires Ts=0.05 s (20 Hz)")
-        if self.action_block_lengths != (3, 3, 3, 3, 2, 2, 2, 2):
-            raise ValueError("action_block_lengths is fixed to (3,3,3,3,2,2,2,2)")
+        if not self.action_block_lengths or any(
+            type(length) is not int or length <= 0 for length in self.action_block_lengths
+        ):
+            raise ValueError("action_block_lengths must contain positive integers")
         if sum(self.action_block_lengths) != self.horizon_steps:
             raise ValueError("action block lengths must cover the prediction horizon")
 
@@ -258,7 +260,7 @@ class TaskParams:
 
     @property
     def action_block_starts(self) -> tuple[int, ...]:
-        """Start indices of the fixed K=8 action blocks on the 20-step grid."""
+        """Start indices of the configured action blocks on the prediction grid."""
 
         starts: list[int] = []
         index = 0

@@ -121,9 +121,12 @@ class AcadosExpert:
     acados model augments it with the preceding 16 duties (29 solver states),
     so ``u_k-u_{k-1}`` and reverse-pair constraints are enforced inside the
     optimization rather than repaired after the solve.  The model uses the
-    same normalized five-substep RK4 map, 20 intervals, scalar-first
-    quaternion convention, and body-frame 16-channel RCS matrix as the IPOPT
-    oracle.  ``solve`` returns ``(21,13)``, ``(20,16)``, and ``(20,6)`` arrays;
+    same normalized five-substep RK4 map as the IPOPT oracle by default.
+    An opt-in matched executor uses a discrete free-floating map and appends
+    mass/fuel (31 solver states); optional jerk cost also stores the preceding
+    world COM interval acceleration (34 states). Both use scalar-first quaternions and a
+    body-frame 16-channel RCS matrix. For horizon N, ``solve`` returns
+    ``(N+1,13)``, ``(N,16)``, and ``(N,6)`` arrays;
     `status` is numerical solver status while `quality_verdict` is an
     independent finite/dynamics/hard-margin gate.  Solver generation requires
     the Isaac Sim Python environment with CasADi, acados_template, and
@@ -142,6 +145,9 @@ class AcadosExpert:
         qp_solver_cond_N: int = 5,
         qp_solver_iter_max: int = 100,
         build_on_init: bool = False,
+        executor_model: Any = None,
+        jerk_weight: float = 0.0,
+        jerk_scale_m_s3: float = 0.1,
     ) -> None:
         if nlp_solver_type not in ("SQP", "SQP_RTI"):
             raise ValueError("nlp_solver_type must be SQP or SQP_RTI")
@@ -150,6 +156,16 @@ class AcadosExpert:
         if qp_solver_cond_N <= 0 or qp_solver_iter_max <= 0:
             raise ValueError("qp_solver_cond_N and qp_solver_iter_max must be positive")
         self.task_params = task_params or TaskParams()
+        self.executor_model = executor_model
+        if not np.isfinite(jerk_weight) or jerk_weight < 0:
+            raise ValueError('jerk_weight must be finite and nonnegative')
+        if not np.isfinite(jerk_scale_m_s3) or jerk_scale_m_s3 <= 0:
+            raise ValueError('jerk_scale_m_s3 must be finite and positive')
+        if jerk_weight > 0 and executor_model is None:
+            raise ValueError('jerk cost requires the matched executor')
+        self.jerk_weight = float(jerk_weight)
+        self.jerk_scale_m_s3 = float(jerk_scale_m_s3)
+        self.solver_state_dim = (34 if jerk_weight > 0 else 31) if executor_model is not None else 29
         self.code_export_root = (
             Path(code_export_root)
             if code_export_root is not None
@@ -209,18 +225,33 @@ class AcadosExpert:
         u = ca.SX.sym("u", nu)
         p = ca.SX.sym("p", np_model)
         x_phys = x_aug[0:nx_phys]
-        x_next_phys = casadi_rk4_map(x_phys, u, params, physical_parameters=p[16:])
-        x_next = ca.vertcat(x_next_phys, u)
+        if self.executor_model is None:
+            x_next_phys = casadi_rk4_map(x_phys, u, params, physical_parameters=p[16:])
+            x_next = ca.vertcat(x_next_phys, u)
+        else:
+            if params.mean_motion_rad_s != 0:
+                raise ValueError('matched executor requires free-floating n=0')
+            next_extended = self.executor_model.symbolic(ca.vertcat(x_phys,x_aug[29:31]),u,p[16:])
+            x_next = ca.vertcat(next_extended[:13],u,next_extended[13:15])
+        if self.jerk_weight > 0:
+            # Discrete world-frame COM acceleration, identical to the recorded
+            # velocity-difference convention, including fuel gating/mass.
+            acceleration_W = (x_next[3:6] - x_phys[3:6]) / params.control_period_s
+            normalized_jerk = (acceleration_W - x_aug[31:34]) / (
+                params.control_period_s * self.jerk_scale_m_s3)
+            x_next = ca.vertcat(x_next, acceleration_W)
 
         model = AcadosModel()
         short_hash = hashlib.sha1(
             repr(
                 (
-                    'runtime_physics_v1', structural_signature(params),
+                    'runtime_physics_v2_fuel_barrier', structural_signature(params),
+                    None if self.executor_model is None else self.executor_model.signature(),
                     self.nlp_solver_type,
                     self.max_iterations,
                     self.qp_solver_cond_N,
                     self.qp_solver_iter_max,
+                    ('jerk_memory_v1', self.jerk_weight, self.jerk_scale_m_s3),
                 )
             ).encode("utf-8")
         ).hexdigest()[:10]
@@ -233,13 +264,15 @@ class AcadosExpert:
         # independent consistency validation.  acados still owns the OCP
         # solve; this map only avoids running hundreds of Python RK4 helper
         # calls in the 20 Hz execution path.
-        numeric_x = ca.SX.sym(f"{model.name}_numeric_x", nx_phys)
+        numeric_x = ca.SX.sym(f"{model.name}_numeric_x", 15 if self.executor_model is not None else nx_phys)
         numeric_u = ca.SX.sym(f"{model.name}_numeric_u", nu)
         numeric_physical = ca.SX.sym(f"{model.name}_numeric_physical", 115)
         numeric_map = ca.Function(
             f"{model.name}_numeric_map",
             [numeric_x, numeric_u, numeric_physical],
-            [casadi_rk4_map(numeric_x, numeric_u, params, physical_parameters=numeric_physical)],
+            [self.executor_model.symbolic(numeric_x,numeric_u,numeric_physical)
+             if self.executor_model is not None else
+             casadi_rk4_map(numeric_x, numeric_u, params, physical_parameters=numeric_physical)],
         )
         self._numeric_rollout = numeric_map.mapaccum(f"{model.name}_numeric_rollout", N)
 
@@ -253,7 +286,7 @@ class AcadosExpert:
         # this difference in the running least-squares cost keeps the IPOPT
         # and acados objectives identical while the hard path constraint below
         # enforces the same rate/block semantics.
-        duty_delta = u - x_aug[nx_phys:nx]
+        duty_delta = u - x_aug[13:29]
         y_expr = ca.vertcat(
             position_error,
             velocity_error,
@@ -263,6 +296,8 @@ class AcadosExpert:
             duty_delta,
         )
         y_expr_e = ca.vertcat(position_error, velocity_error, q_error, omega_error)
+        if self.jerk_weight > 0:
+            y_expr = ca.vertcat(y_expr, normalized_jerk)
 
         ocp = AcadosOcp()
         ocp.model = model
@@ -280,7 +315,7 @@ class AcadosExpert:
 
         ocp.cost.cost_type = "NONLINEAR_LS"
         ocp.model.cost_y_expr = y_expr
-        ocp.cost.yref = np.zeros(3 + 3 + 3 + 3 + 16 + 16, dtype=np.float64)
+        ocp.cost.yref = np.zeros(int(y_expr.numel()), dtype=np.float64)
         ocp.cost.W = np.diag(
             [
                 *([params.position_cost] * 3),
@@ -289,6 +324,7 @@ class AcadosExpert:
                 *([params.angular_velocity_cost] * 3),
                 *([params.duty_cost] * 16),
                 *([params.duty_rate_cost] * 16),
+                *([self.jerk_weight] * 3 if self.jerk_weight > 0 else []),
             ]
         )
         ocp.cost.cost_type_e = "NONLINEAR_LS"
@@ -331,7 +367,9 @@ class AcadosExpert:
         ocp.constraints.ubx_e = box_upper
         ocp.constraints.x0 = np.zeros(nx, dtype=np.float64)
 
-        koz_h, koz_ecbf = casadi_koz_terms(x_phys, u, params, physical_parameters=p[16:])
+        koz_physical = p[16:] if self.executor_model is None else ca.vertcat(x_aug[29],p[17:])
+        available_u = u if self.executor_model is None else u * ca.if_else(x_aug[30] > 0., 1., 0.)
+        koz_h, koz_ecbf = casadi_koz_terms(x_phys, available_u, params, physical_parameters=koz_physical)
         pair_sums = ca.vertcat(
             *[u[2 * pair] + u[2 * pair + 1] for pair in range(8)]
         )
@@ -407,6 +445,7 @@ class AcadosExpert:
         *,
         time_s: float = 0.0,
         reference_states: npt.ArrayLike | None = None,
+        previous_acceleration_W: npt.ArrayLike | None = None,
     ) -> ExpertResult:
         """Solve one trajectory on the global 20 Hz grid."""
 
@@ -415,6 +454,10 @@ class AcadosExpert:
             raise ValueError('time_s must be finite and nonnegative')
         x_initial = _as_state(x0)
         previous = _previous_duty(warm_start)
+        if self.jerk_weight > 0:
+            previous_acceleration = np.asarray(previous_acceleration_W, dtype=np.float64)
+            if previous_acceleration.shape != (3,) or not np.all(np.isfinite(previous_acceleration)):
+                raise ValueError('previous_acceleration_W must be a finite measured shape-(3,) array')
         solver = self._ensure_solver(params)
         start = time.perf_counter()
         N = params.horizon_steps
@@ -442,7 +485,22 @@ class AcadosExpert:
         physical = pack_physical_parameters(params)
         state_guess, duty_guess = _warm_guess(params, x_initial, previous, warm_start, B)
         x0_aug = np.concatenate((x_initial, previous))
+        fuel_guess = None
+        if self.executor_model is not None:
+            model = self.executor_model
+            matched_guess, duty_guess = model.warm_rollout(
+                np.r_[x_initial, params.mass_kg, model.remaining_fuel], duty_guess,
+                physical, params.action_block_lengths)
+            state_guess = matched_guess[:, :13]
+            fuel_guess = matched_guess[:, 13:15]
+            x0_aug = np.r_[x0_aug, fuel_guess[0]]
+        acceleration_guess = np.empty((N + 1, 0))
+        if self.jerk_weight > 0:
+            acceleration_guess = np.vstack((previous_acceleration,
+                np.diff(state_guess[:, 3:6], axis=0) / params.control_period_s))
+            x0_aug = np.r_[x0_aug, previous_acceleration]
         independent_rollout: FloatArray | None = None
+        self.predicted_mass_fuel = None
 
         try:
             solver.set(0, "lbx", x0_aug)
@@ -453,7 +511,7 @@ class AcadosExpert:
                     "p",
                     np.concatenate((references[index], fov_targets[index], physical)),
                 )
-                # Hold the duty constant inside each K=8 action block.  At a
+                # Hold the duty constant inside each configured action block. At a
                 # block boundary the normal rate limit is active; otherwise
                 # the same augmented-memory constraint is an equality.
                 path_lower = np.concatenate(
@@ -485,11 +543,13 @@ class AcadosExpert:
                 solver.set(
                     index,
                     "x",
-                    np.concatenate((state_guess[index], previous if index == 0 else duty_guess[index - 1])),
+                    np.concatenate((state_guess[index], previous if index == 0 else duty_guess[index - 1],
+                                    [] if fuel_guess is None else fuel_guess[index], acceleration_guess[index])),
                 )
                 solver.set(index, "u", duty_guess[index])
             solver.set(N, "p", np.concatenate((references[N], fov_targets[N], physical)))
-            solver.set(N, "x", np.concatenate((state_guess[N], duty_guess[N - 1])))
+            solver.set(N, "x", np.concatenate((state_guess[N], duty_guess[N - 1],
+                                              [] if fuel_guess is None else fuel_guess[N], acceleration_guess[N])))
             status_code = int(solver.solve())
             solved_state_aug = np.vstack([np.asarray(solver.get(i, "x"), dtype=np.float64) for i in range(N + 1)])
             solved_duty = np.vstack([np.asarray(solver.get(i, "u"), dtype=np.float64) for i in range(N)])
@@ -502,10 +562,13 @@ class AcadosExpert:
                 # gate checks the same trajectory that will be applied.
                 if self._numeric_rollout is not None:
                     rollout_tail = np.asarray(
-                        self._numeric_rollout(x_initial, solved_duty.T, np.repeat(physical[:, None], N, axis=1)),
+                        self._numeric_rollout(x_initial if fuel_guess is None else np.r_[x_initial, fuel_guess[0]],
+                                              solved_duty.T, np.repeat(physical[:, None], N, axis=1)),
                         dtype=np.float64,
                     )
-                    rollout = np.vstack((x_initial, rollout_tail.T))
+                    rollout = np.vstack((x_initial, rollout_tail[:13].T))
+                    if fuel_guess is not None:
+                        self.predicted_mass_fuel = np.vstack((fuel_guess[0], rollout_tail[13:15].T))
                 else:  # pragma: no cover - only if map construction is unavailable
                     rollout = np.empty((N + 1, 13), dtype=np.float64)
                     rollout[0] = x_initial
@@ -517,19 +580,21 @@ class AcadosExpert:
                     raise RuntimeError("independent CasADi rollout returned an invalid shape/value")
                 independent_rollout = np.ascontiguousarray(rollout)
                 solved_state_aug[:, :13] = rollout
-                solved_state_aug[0, 13:] = previous
-                solved_state_aug[1:, 13:] = solved_duty
+                solved_state_aug[0, 13:29] = previous
+                solved_state_aug[1:, 13:29] = solved_duty
         except Exception as exc:
             status_code = -1
             status = "failed"
             failure_reason = str(exc)
             solved_state_aug = np.zeros((N + 1, self.solver_state_dim), dtype=np.float64)
             solved_state_aug[:, :13] = np.tile(x_initial, (N + 1, 1))
-            solved_state_aug[:, 13:] = np.vstack((previous, np.zeros((N, 16))))
+            solved_state_aug[:, 13:29] = np.vstack((previous, np.zeros((N, 16))))
             solved_duty = np.zeros((N, 16), dtype=np.float64)
 
         solved_state = np.ascontiguousarray(solved_state_aug[:, :13])
         solved_wrench = np.ascontiguousarray(solved_duty @ B.T)
+        if self.predicted_mass_fuel is not None:
+            solved_wrench *= (self.predicted_mass_fuel[:-1,1] > 0)[:,None]
         accepted, margins, validation_reason = validate_solution(
             solved_state,
             solved_duty,
@@ -537,6 +602,8 @@ class AcadosExpert:
             previous,
             reference_states=references,
             dynamics_rollout=independent_rollout,
+            stage_masses=None if self.predicted_mass_fuel is None else self.predicted_mass_fuel[:,0],
+            stage_fuel=None if self.predicted_mass_fuel is None else self.predicted_mass_fuel[:,1],
         )
         if status != "success":
             quality = "failed"

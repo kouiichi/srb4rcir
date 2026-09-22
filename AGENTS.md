@@ -6,9 +6,37 @@ This is the locally repaired SRB 0.0.5 checkout:
 
 Current development focuses on: (1) validating and improving the NMPC trajectory expert in SRB; (2) making SRB dynamics, actuators, task references, and recorded actions consistent enough for ACT / Diffusion Policy imitation learning; and (3) keeping a reproducible GPU Kit / CPU PhysX environment split.
 
-Updated: 2026-09-11. This file describes the current state, commands, and development boundaries. It is not an upstream SRB configuration.
+Updated: 2026-09-17. This file describes the current state, commands, and development boundaries. It is not an upstream SRB configuration.
 
 Preserve existing local edits. Before changing code or committing, inspect git status --short and git diff; do not assume older lists of modified files still describe the checkout.
+
+## Standing user defaults for new NMPC experiments (2026-09-16)
+
+Unless the user explicitly requests another setting, **plan 40 intervals and execute the first 3 successive planned actions before measured-state replanning (N=40, K=3)**. At dt=0.05 s this is a 2 s prediction horizon and a nominal 0.15 s replanning interval. K=3 does not mean apply only the first action for three steps, and does not change the physics/control period to 0.15 s. Optimizer move blocking is a separate concept.
+
+Use the matched **free-floating** SRB closed loop (`--matched-executor`, n=0 on both sides), GPU Kit / CPU PhysX, and `--physics-only`. Keep the prior aligned initial state/goal unless explicitly changed. Pass `--horizon-steps 40 --execute-steps 3` in recorded commands even though the replay closed-loop CLI now defaults to these values. Explicit user requests and named ablations override these defaults; do not rewrite historical reports or archived plans.
+
+The library's legacy HCW `TaskParams`/offline config and open-loop saved-plan replay are retained for historical reproduction. They are not the default choice for new SRB experiments. Do not infer current model parameters from the historical sections below: matched mode reads actual mass, full inertia, COM, fuel and RCS mapping.
+
+Do not silently tune duty-rate limits, smoothness costs or jerk penalties when testing a dynamics/initialization fix. Record such changes as separate experimental factors.
+
+### Wet-mass initialization/reset invariant (verified 2026-09-16)
+
+`ThrustAction` now writes wet mass and inertia during construction and every reset, before the first force. PhysX mass must equal dry mass + remaining fuel. For the current vehicle: dry=6.108697891 kg, full fuel=5 kg, initial wet=11.108697891 kg. Inertia is restored from an immutable dry baseline with the existing proportional-to-mass approximation; this does not model tank geometry or shifting COM. Partial resets must leave unselected environments unchanged. Do not move fuel burn ahead of force submission without revalidating the matched executor. External mass/inertia domain randomization must explicitly reconcile ownership of this baseline; it was not validated here.
+
+Before this fix, the first force used dry mass and the first fuel update then installed wet mass; reset also replenished fuel without synchronizing PhysX. Historical experiments retain that behavior in their recorded data and are not bit-for-bit reproducible with the repaired actuator.
+
+Actual two-environment reset regression: `scripts/validate_nmpc_replay.py replay --plan logs/nmpc_validation_20260907/approach_hcw_plan --output NEW_DIRECTORY --physics-only --device cuda:1 --check-mass-reset` (use the wrapper and unmasked GPU prefix below). It tests constructor properties before the first reset, wet mass/inertia, repeated resets, first-force mass, partial/empty/tensor-index resets, and full environment reset after a fresh fuel burn. Final evidence: `logs/nmpc_wet_mass_20260916/reset_final_green/mass_reset_check.json`.
+
+Same-condition N40/K3 before/after runs both completed 1200/1200 steps. After repair: strict hover 36.9 s, minimum KOZ clearance 0.642606 m, contact force 0 N. First sampled jerk fell from 0.656996 to 0.000508 m/s³, but whole-run jerk-norm RMS stayed approximately 0.108 m/s³: this is an initialization repair, not a smoothness solution. Hot solve P50/P99=60.30/153.37 ms; 1.253% exceeded the 150 ms replanning budget. Synchronous simulation does not establish real-time performance. Full commands, parameters, warnings, raw records and plots: `logs/nmpc_wet_mass_20260916/report.md`, `before_N40_K3/`, `after_N40_K3/`.
+
+## Optional smoothness experiments (2026-09-17)
+
+The replay CLI accepts `--duty-rate RATE --jerk-weight WEIGHT --jerk-scale 0.1`. Defaults remain rate20/s (from the historical plan) and jerk weight0; N40/K3 and matched free-floating remain the standing experiment defaults. Positive jerk weight requires matched mode and adds three previous-world-acceleration memory states to acados (34 internal states, public State13 unchanged). The first stage is anchored to the last actual 0.05 s velocity difference, not a saved predicted acceleration or a K×dt average. Initial pre-ignition acceleration is zero. Config/anchors are saved in `smoothness_config.json` and `predictions.npz`.
+
+Approved eight-group evidence: `logs/nmpc_smoothness_ablation_20260917/report.md`. Baseline, rate4 and rate2 completed1200 steps; rate1 exhausted fuel and stopped837 steps. Jerk weights0.001/0.01/0.1 and rate2+jerk0.001 stopped744/678/831/855 steps due to acados status4 near hover. Saved-primal reproduction on fresh solvers yields QP MINSTEP; cold initialization at the same four states passes. No hidden recovery was added. These jerk configurations are experimental, not complete-success demonstrations. Compare common first30s windows, retain failure artifacts, and do not interpret early termination as efficiency/smoothness success.
+
+The runner `scripts/run_nmpc_smoothness_ablation.py NEW_ROOT --phase single` performs sequential 30-step debug and1200-step attempts for seven baseline/single-factor settings; `--phase combo` uses the saved selection rule and adds the eighth. Use wrapper/Isaac Python and the GPU/CPU device rules below. Analysis/report: `scripts/analyze_nmpc_ablation.py ROOT`, `scripts/report_nmpc_ablation.py ROOT`. Preserve default controller settings unless the user explicitly adopts a candidate. Stabilizing the jerk-cost warm start and revalidating full closed-loop runs remains follow-up work.
 
 ## Runtime and dependency rules
 
@@ -48,7 +76,9 @@ On this five-GPU host, masked runs reported CUDA/Omniverse enumeration warnings 
     --physics-only \
     --device cuda:1 \
     --closed-loop \
-    --align-goal
+    --align-goal \
+    --matched-executor \
+    --horizon-steps 40 --execute-steps 3
 
 Do not combine this with CUDA_VISIBLE_DEVICES=1. With no masking, cuda:1 is the Kit/Omniverse ordinal for the physical GPU whose Bus-ID is 81 on this host. This configuration passed both a 20-step smoke test and a 1200-step / 60-second replay.
 
@@ -69,7 +99,9 @@ This is the historical CPU physics fallback; --device cpu does not guarantee tha
     --physics-only \
     --device cpu \
     --closed-loop \
-    --align-goal
+    --align-goal \
+    --matched-executor \
+    --horizon-steps 40 --execute-steps 3
 
 Run all commands from the repository root shown above. Every run needs a new output directory; the validation script uses exist_ok=False. For a short smoke test, append --steps 20. Omit --steps for the full saved-plan length (currently 1200). The thread limits are the NMPC validation settings, not universal GPU requirements.
 
@@ -88,7 +120,7 @@ Video and camera rendering are a separate path; do not infer that video works fr
 
 ## Current NMPC expert
 
-The expert is an optimization controller, not a trained neural network. Its current contract is:
+The expert is an optimization controller, not a trained neural network. New SRB experiments use the standing matched free-floating N=40/K=3 defaults above. The following is the **historical HCW baseline contract**, retained to interpret old artifacts:
 
 - 13-state position, velocity, scalar-first quaternion, and body angular velocity;
 - 16 one-sided thruster duties in [0,1];
@@ -108,7 +140,7 @@ The 16 duties map to a six-dimensional wrench:
 
 ThrustAction also updates mass and inertia as fuel is consumed and calls PhysX setters for masses, inertias, forces, torques, and indices. Do not treat a nominal 6D wrench as a calibrated real-executor label.
 
-## Latest verified NMPC result
+## Historical verified NMPC result (2026-09-11, not current defaults)
 
 The GPU-Kit comparison used:
 
@@ -150,7 +182,7 @@ Boundary results:
 - Replacing initial measured mass/inertia/COM: first acados status 4 and zero executed commands; diagnostic only, not a completed calibration.
 - Native [0,0,0.5] target with large attitude change: stopped after 44 steps because a predicted angular-rate margin was slightly negative.
 - NMPC P99 was about 144 ms in a separate benchmark/load setup; safety OSQP P99 was about 1.21 ms.
-- Expert HCW uses n=0.001027 while SRB free-floating uses n=0; the free-floating expert path is not yet consistent.
+- Historical expert HCW uses n=0.001027 while SRB free-floating uses n=0. The newer `--matched-executor` path removes that mismatch; its rotation integrator remains approximate and must be audited against measured execution.
 
 ## PhysX device rule
 
@@ -174,9 +206,9 @@ Prioritize these NMPC/SRB tasks over unrelated RL training. They are planned wor
 
 ### 1. Model and task consistency
 
-- Decide whether the task is HCW/LVLH or true free-floating; do not silently mix n=0.001027 and n=0.
-- Connect actual wet/dry mass, fuel evolution, inertia, COM, and actual 16-RCS mapping to the expert, or model their uncertainty.
-- Pass absolute episode time when using time-varying references; the current reference cache covers only the 0..1 s horizon.
+- Use true free-floating for new SRB experiments unless explicitly overridden; do not silently mix n=0.001027 and n=0.
+- Preserve the matched executor's actual wet/dry mass, fuel evolution, inertia, COM and 16-RCS mapping. Validate any new geometry, fuel distribution or executor behavior against real steps.
+- Pass absolute episode time for time-varying references. The current stationary matched experiment passes an explicit stationary COM reference and avoids reintegrating it from t=0 on each solve.
 - Derive KOZ geometry from vehicle dimensions, reference point, uncertainty, and approach phase. Radius 0.5 m is an experiment default, not a traced engineering specification.
 
 ### 2. Expert quality and validation
