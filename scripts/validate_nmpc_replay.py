@@ -529,7 +529,13 @@ def replay(args):
                         previous_acceleration = (measured[-1][3:6]-measured[-2][3:6])/params.control_period_s if k else np.zeros(3)
                         acceleration_boundaries.append(previous_acceleration.copy())
                         horizon_reference = np.repeat(goal[None,:],params.horizon_steps+1,axis=0) if args.matched_executor else None
-                        if args.surface_stages:
+                        if args.surface_sync is not None:
+                            from srb.nmpc.surface_approach import synchronous_reference
+                            horizon_reference = synchronous_reference(
+                                (k+np.arange(params.horizon_steps+1))*params.control_period_s,
+                                states[0,:3], states[0,6:10], cfg.target_offset_pos, cfg.target_offset_quat,
+                                com, args.surface_sync)
+                        elif args.surface_stages:
                             from srb.nmpc.surface_approach import staged_reference
                             horizon_reference = staged_reference(
                                 (k+np.arange(params.horizon_steps+1))*params.control_period_s,
@@ -654,6 +660,7 @@ def replay(args):
                                            and max_contact_force <= 1e-4)
             result['surface_approach'] = surface_result
             result['surface_reference_stages_s'] = args.surface_stages
+            result['surface_reference_sync_s'] = args.surface_sync
             np.savez_compressed(args.output / 'surface_metrics.npz', **series, success_sample=good)
         save_json(args.output / "replay.json", result)
         if telemetry:
@@ -737,6 +744,8 @@ def main():
                    help='Derive actor +Z / target -X bus face goal from loaded geometry at 0.30 m gap')
     r.add_argument('--surface-stages', nargs=2, type=float, metavar=('TURN_S', 'APPROACH_S'),
                    help='Optional quintic turn-then-approach reference; default uses the final static goal directly')
+    r.add_argument('--surface-sync', type=float, metavar='DURATION_S',
+                   help='Simultaneous quintic position/attitude reference over one duration')
     r.add_argument('--surface-display-materials', action='store_true',
                    help='Video-only readable colours and bus face highlights; does not alter geometry or physics')
     r.add_argument('--native-goal', action='store_true', help='Use native SRB goal in closed-loop controller')
@@ -754,6 +763,9 @@ def main():
             parser.error('--video-fill-intensity must be finite/nonnegative and requires video')
         if args.surface_stages and (not args.surface_approach or any(not np.isfinite(s) or s <= 0 for s in args.surface_stages)):
             parser.error('--surface-stages requires surface-approach and two positive finite durations')
+        if args.surface_sync is not None and (not args.surface_approach or args.surface_stages
+                or not np.isfinite(args.surface_sync) or args.surface_sync <= 0):
+            parser.error('--surface-sync requires surface-approach, a positive finite duration, and excludes surface-stages')
         if args.surface_approach and (not args.matched_executor or args.align_goal or args.native_goal or args.check_mass_reset):
             parser.error('--surface-approach requires matched-executor and excludes align-goal/native-goal/check-mass-reset')
         if args.stable_video_lighting and not args.video:

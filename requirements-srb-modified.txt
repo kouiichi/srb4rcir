@@ -1,0 +1,32 @@
+# SRB 0.0.5 modified checkout
+#
+# Install with Isaac Sim's Python (not the system/conda Python):
+#   source ./srb_0.0.5_env.sh
+#   "$ISAAC_SIM_PYTHON" -m pip install --no-deps -r requirements-srb-modified.txt
+#
+# Isaac Sim, Isaac Lab, PyTorch, NumPy, SciPy, pandas, h5py, oxidasim and
+# SimForge are supplied by the validated Isaac Sim 4.5 runtime.  The pins
+# below record the versions tested in this checkout; do not install a second
+# copy of Isaac Sim or torch from ordinary PyPI.
+
+# SRB 0.0.5 runtime dependencies (also declared by pyproject.toml)
+gymnasium==0.29.1
+oxidasim==0.1.0
+simforge==0.2.1
+pydantic==2.8.2
+orjson==3.11.9
+PyYAML==6.0.1
+
+# Modified NMPC expert / matched executor
+casadi==3.8.0
+acados_template==0.5.1
+osqp==0.6.5
+
+# Optional analysis and recorded-data paths used by the scripts
+matplotlib==3.8.4
+imageio==2.22.2
+
+# Optional isolated Parquet output.  Install these into third_party/python,
+# rather than replacing Isaac Sim's bundled packages:
+#   "$ISAAC_SIM_PYTHON" -m pip install --no-deps --only-binary=:all: \
+#     --target third_party/python -r requirements-nmpc-isolated.txt

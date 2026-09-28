@@ -6,6 +6,39 @@ from srb.nmpc.surface_approach import face_goal, surface_sample, largest_axis_fa
 from srb.nmpc.quaternion import quaternion_to_rotation
 
 
+def test_synchronous_reference_moves_and_turns_together_with_consistent_velocity():
+    from srb.nmpc.surface_approach import synchronous_reference
+    from scipy.spatial.transform import Rotation
+    p0 = np.array([-3., .2, .15]); pg = np.array([-.5, 0., 0.])
+    com = np.array([.003, .004, .045])
+    def ref(t):
+        return synchronous_reference(np.atleast_1d(t), p0, [1.,0.,0.,0.],
+                                     pg, [np.sqrt(.5),0.,np.sqrt(.5),0.], com, 40.)
+    for t in [5., 20., 35.]:
+        x = ref(t)[0]; r = quaternion_to_rotation(x[6:10])
+        progress = ((x[:3]-r@com)-p0)[0]/(pg-p0)[0]
+        angle = Rotation.from_matrix(r).as_rotvec()[1]
+        assert 0 < progress < 1
+        assert angle/(np.pi/2) == pytest.approx(progress)
+        eps = 1e-4
+        np.testing.assert_allclose(x[3:6], (ref(t+eps)[0,:3]-ref(t-eps)[0,:3])/(2*eps), atol=1e-8)
+        rm = quaternion_to_rotation(ref(t-eps)[0,6:10])
+        rp = quaternion_to_rotation(ref(t+eps)[0,6:10])
+        np.testing.assert_allclose(x[10:13], Rotation.from_matrix(rm.T@rp).as_rotvec()/(2*eps), atol=1e-8)
+    for t, p in [(-1.,p0),(0.,p0),(40.,pg),(50.,pg)]:
+        x = ref(t)[0]
+        np.testing.assert_allclose(x[:3]-quaternion_to_rotation(x[6:10])@com, p, atol=1e-12)
+        np.testing.assert_allclose(x[[3,4,5,10,11,12]], 0., atol=1e-12)
+
+
+@pytest.mark.parametrize('duration', [0., -1., np.nan, np.inf])
+def test_synchronous_reference_rejects_invalid_duration(duration):
+    from srb.nmpc.surface_approach import synchronous_reference
+    with pytest.raises(ValueError):
+        synchronous_reference([0.], np.zeros(3), [1.,0.,0.,0.], np.ones(3),
+                              [1.,0.,0.,0.], np.zeros(3), duration)
+
+
 def test_face_gap_and_alignment_follow_rotated_translated_target():
     target_q = [np.sqrt(.5), 0, 0, np.sqrt(.5)]
     target_p = np.array([2., -3., 1.])
