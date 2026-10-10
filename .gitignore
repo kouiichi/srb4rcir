@@ -43,3 +43,4 @@ wandb/
 /scripts/archive
 /tests/archive
 spacerobot_env
+/docs/src/workflows

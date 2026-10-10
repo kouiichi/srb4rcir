@@ -10,6 +10,9 @@ Updated: 2026-09-17. This file describes the current state, commands, and develo
 
 Preserve existing local edits. Before changing code or committing, inspect git status --short and git diff; do not assume older lists of modified files still describe the checkout.
 
+-所有文档和代码注释均描述当前状态，不得记录任何AI历史修改记录。更新当前状态描述不得将尚未确认的实现偏差写成新的业务规则。
+-比如某次开发工作临时规划了phase1到phase5阶段，那么任何文档不允许记录phase1-phase5相关字段描述，只需要按照代码和项目现状更新文档内容即可。
+-比如某次开发需求A决策是当前项目现状，B决策是这次开发任务新的决策，且A决策作废，那么文档记录就不能留下A决策的历史，只需要记录这次新的决策B。
 ## Standing user defaults for new NMPC experiments (2026-09-16)
 
 Unless the user explicitly requests another setting, **plan 40 intervals and execute the first 3 successive planned actions before measured-state replanning (N=40, K=3)**. At dt=0.05 s this is a 2 s prediction horizon and a nominal 0.15 s replanning interval. K=3 does not mean apply only the first action for three steps, and does not change the physics/control period to 0.15 s. Optimizer move blocking is a separate concept.
@@ -139,51 +142,6 @@ The 16 duties map to a six-dimensional wrench:
     [Fx,Fy,Fz,tx,ty,tz] = B(6x16) @ duty16
 
 ThrustAction also updates mass and inertia as fuel is consumed and calls PhysX setters for masses, inertias, forces, torques, and indices. Do not treat a nominal 6D wrench as a calibrated real-executor label.
-
-## Historical verified NMPC result (2026-09-11, not current defaults)
-
-The GPU-Kit comparison used:
-
-    CUDA_VISIBLE_DEVICES: unset
-    CUDA_DEVICE_ORDER: PCI_BUS_ID
-    Kit device: cuda:1, physical RTX 4090 Bus-ID 81
-    physics-only: true
-    SRB environment: CPU
-    closed-loop: true
-    aligned target: true, [-1.5,0,0] m, unit attitude
-    initial position: [-3,+0.2,0.15] m; unit attitude, zero linear/angular velocity
-    requested/executed: 1200/1200 steps, 60 s
-
-Strict hover requires position error <0.1 m, relative speed <0.05 m/s and attitude error <5 degrees continuously for at least 1 s. Complete success also requires all requested steps and no failure. SRB native success is a different, looser criterion.
-
-Results:
-
-| Metric | Value |
-|---|---:|
-| final position error | 0.00145176 m |
-| final relative speed | 7.15e-7 m/s |
-| final attitude error | 0.0003526 deg |
-| longest strict hover | 27.35 s |
-| minimum KOZ clearance | 0.3159 m |
-| maximum contact force | 0 N |
-| solver P50 | 17.34 ms |
-| solver P99 | 65.39 ms |
-| deadline miss fraction | 1.668% |
-| fuel remaining | 1.506 kg from 5 kg |
-
-This is a successful closed-loop result for a narrow aligned-target condition. It does not prove general-task success, GPU PhysX execution, or real-time compliance.
-
-Artifacts: logs/nmpc_validation_gpu1_nomask_full_20260911/replay.json, replay.npz, comparison.png, and /tmp/nmpc_gpu1_nomask_full_20260911.log. The broader report is logs/nmpc_validation_20260908/report.md.
-
-Boundary results:
-
-- Saved HCW actions replayed open-loop in stationary SRB: final position error about 13.99 m; failed.
-- Two same-side feedback closed loops: strict complete success, with overshoot and correction before hover.
-- Replacing initial measured mass/inertia/COM: first acados status 4 and zero executed commands; diagnostic only, not a completed calibration.
-- Native [0,0,0.5] target with large attitude change: stopped after 44 steps because a predicted angular-rate margin was slightly negative.
-- NMPC P99 was about 144 ms in a separate benchmark/load setup; safety OSQP P99 was about 1.21 ms.
-- Historical expert HCW uses n=0.001027 while SRB free-floating uses n=0. The newer `--matched-executor` path removes that mismatch; its rotation integrator remains approximate and must be audited against measured execution.
-
 ## PhysX device rule
 
 Forcing env.sim.device=cuda:0 can make environment tensors and PhysX setter inputs disagree. Known errors include:
@@ -251,3 +209,4 @@ For RL experiments, read AGENTS-RL.md first and use scripts/srb_rl_agent.py wher
 Every experiment report must include the exact command and working directory; Kit device and CUDA visibility; environment device, PhysX path, and --physics-only status; task, target, initial state, model/actuator parameters, horizon, period and seed; requested versus executed steps; success criteria and safety metrics; solver P50/P99 and deadline misses; output/log paths; failures, warnings, and what the result does not prove.
 
 Do not commit, push, or modify unrelated SRB 0.0.6 files unless explicitly requested.
+

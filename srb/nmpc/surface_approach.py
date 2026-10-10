@@ -41,7 +41,10 @@ def read_actor_mesh(stage, root_path):
             continue
         mesh = UsdGeom.Mesh(prim)
         matrix, _ = cache.ComputeRelativeTransform(prim, root)
-        points = np.asarray([matrix.Transform(Gf.Vec3d(*p)) for p in mesh.GetPointsAttr().Get()])
+        points = np.asarray([
+            matrix.Transform(Gf.Vec3d(float(p[0]), float(p[1]), float(p[2])))
+            for p in mesh.GetPointsAttr().Get()
+        ])
         indices = np.asarray(mesh.GetFaceVertexIndicesAttr().Get(), dtype=int)
         offsets = np.r_[0, np.cumsum(mesh.GetFaceVertexCountsAttr().Get())]
         all_faces.extend([indices[a:b] + count for a, b in zip(offsets[:-1], offsets[1:])])
