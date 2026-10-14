@@ -1,0 +1,84 @@
+{
+  "status": "proposal_only_not_authored_in_USD",
+  "coordinate_units": "source units, not calibrated meters",
+  "candidate_role": "DESDynI-derived research service spacecraft",
+  "source_bottom_axis": [
+    0,
+    0,
+    -1
+  ],
+  "candidate_rim_z": -5.100305557250977,
+  "candidate_rim_convex_hull_xy": [
+    [
+      -2.03597,
+      7.4e-05
+    ],
+    [
+      -1.444031,
+      -1.429182
+    ],
+    [
+      -0.015044,
+      -2.020952
+    ],
+    [
+      -0.01491,
+      -2.020932
+    ],
+    [
+      1.414212,
+      -1.429182
+    ],
+    [
+      2.005962,
+      -6.1e-05
+    ],
+    [
+      2.005981,
+      7.4e-05
+    ],
+    [
+      1.414212,
+      1.429061
+    ],
+    [
+      -0.015044,
+      2.021
+    ],
+    [
+      -1.444031,
+      1.429061
+    ]
+  ],
+  "candidate_center_xy": [
+    -0.014994500000000022,
+    2.4000000000024002e-05
+  ],
+  "candidate_rim_xy_size": [
+    4.041950999999999,
+    4.041952
+  ],
+  "contour_scope": "projected minimum-Z convex hull; visually reviewed as approximately octagonal; installation seam requires exact loop reconstruction",
+  "cover_inner_face_z": -5.100305557250977,
+  "cover_thickness_m_research_proposal": 0.005,
+  "cover_thickness_validation": "layout placeholder, not a structural or pressure-vessel specification",
+  "physical_conversion": "position_m = s * position_source; cover_thickness_source = 0.005 / s; s is not selected",
+  "port_position_source_expression": "[center_x, center_y, rim_z - cover_thickness_source]",
+  "port_frame_quaternion_wxyz": [
+    0,
+    1,
+    0,
+    0
+  ],
+  "port_frame_convention": "+Z outward (-Z_source), +X = +X_source, +Y = -Y_source; origin is the study installation plane, not the vendor mating datum",
+  "port_type": "RAFTI Rev A passive fill/drain and refueling interface; service-side active coupling remains separate",
+  "rafti_rev_a_envelope_m": {
+    "front_square": 0.096012,
+    "diagram_body_height": 0.04826,
+    "rear_tube_dimension": 0.0516128
+  },
+  "central_existing_surface_z_source": -4.589625358581543,
+  "central_cover_plane_clearance_source": 0.5106801986694336,
+  "storage": "independent tank geometry and mass model required; shell cavity volume is not tank capacity",
+  "original_meshes_modified": false
+}

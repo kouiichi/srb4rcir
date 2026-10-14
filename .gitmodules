@@ -2,3 +2,6 @@
 	path = assets/srb_assets
 	url = https://github.com/AndrejOrsula/srb_assets
 	branch = main
+[submodule "third_party/lerobot"]
+	path = third_party/lerobot
+	url = https://github.com/huggingface/lerobot.git
