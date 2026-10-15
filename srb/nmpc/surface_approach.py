@@ -88,47 +88,32 @@ def surface_sample(state, com, actor_top, target_face, actor_points, target_poin
     }
 
 
-def staged_reference(times, actor_start, quaternion_start, actor_goal, quaternion_goal,
-                     com, rotate_s, approach_s, *, simultaneous=False):
-    """Quintic turn at the initial actor position, then quintic translation.
-
-    Returns COM position/velocity and body angular velocity consistently with
-    the actor pose path. The time argument is absolute episode time, including
-    all horizon nodes. This is a reference, never a kinematic pose playback.
-    """
-    if any(not np.isfinite(s) or s <= 0 for s in (rotate_s, approach_s)):
-        raise ValueError('stage durations must be positive and finite')
-    times = np.asarray(times, dtype=float)
-    def profile(t, duration):
-        s = np.clip(t/duration, 0., 1.)
-        return 10*s**3-15*s**4+6*s**5, 30*s**2*(1-s)**2/duration
-    a, ad = profile(times, rotate_s)
-    b, bd = (a, ad) if simultaneous else profile(times-rotate_s, approach_s)
-    r0 = Rotation.from_matrix(quaternion_to_rotation(quaternion_start))
-    rg = Rotation.from_matrix(quaternion_to_rotation(quaternion_goal))
-    rotation_vector = (r0.inv()*rg).as_rotvec()
-    rotations = r0 * Rotation.from_rotvec(a[:,None]*rotation_vector)
-    omega = ad[:,None]*rotation_vector
-    delta = np.asarray(actor_goal)-actor_start
-    result = np.zeros((len(times), 13))
-    result[:,:3] = np.asarray(actor_start) + b[:,None]*delta + rotations.apply(com)
-    result[:,3:6] = bd[:,None]*delta + rotations.apply(np.cross(omega, com))
-    result[:,6:10] = rotations.as_quat()[:,[3,0,1,2]]
-    result[:,10:13] = omega
-    return result
-
-
 def synchronous_reference(times, actor_start, quaternion_start, actor_goal,
                           quaternion_goal, com, duration_s):
-    """Translate and turn with one quintic progress at absolute episode time.
+    """Translate and turn together with one quintic progress profile.
 
     Positions supplied by the caller are actor roots; returned states are COM
     states with the rotational velocity offset and body angular velocity.
     After duration_s the reference holds the final pose with zero velocity.
     """
-    return staged_reference(times, actor_start, quaternion_start, actor_goal,
-                            quaternion_goal, com, duration_s, duration_s,
-                            simultaneous=True)
+    if not np.isfinite(duration_s) or duration_s <= 0:
+        raise ValueError('sync duration must be positive and finite')
+    times = np.asarray(times, dtype=float)
+    progress = np.clip(times / duration_s, 0., 1.)
+    progress_rate = (30 * progress**2 * (1 - progress)**2) / duration_s
+    progress = 10 * progress**3 - 15 * progress**4 + 6 * progress**5
+    r0 = Rotation.from_matrix(quaternion_to_rotation(quaternion_start))
+    rg = Rotation.from_matrix(quaternion_to_rotation(quaternion_goal))
+    rotation_vector = (r0.inv() * rg).as_rotvec()
+    rotations = r0 * Rotation.from_rotvec(progress[:, None] * rotation_vector)
+    omega = progress_rate[:, None] * rotation_vector
+    delta = np.asarray(actor_goal) - actor_start
+    result = np.zeros((len(times), 13))
+    result[:, :3] = np.asarray(actor_start) + progress[:, None] * delta + rotations.apply(com)
+    result[:, 3:6] = progress_rate[:, None] * delta + rotations.apply(np.cross(omega, com))
+    result[:, 6:10] = rotations.as_quat()[:, [3, 0, 1, 2]]
+    result[:, 10:13] = omega
+    return result
 
 
 def apply_display_materials(stage, actor_paths, target_paths, actor_top, target_face):

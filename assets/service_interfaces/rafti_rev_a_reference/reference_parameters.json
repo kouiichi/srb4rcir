@@ -1,0 +1,87 @@
+{
+  "model": "RAFTI Rev A visual research reconstruction",
+  "units": "meters",
+  "up_axis": "Z",
+  "outward_axis": "+Z",
+  "drawing_dimensions_m": {
+    "front_square_envelope": 0.096012,
+    "body_height": 0.04826,
+    "rear_tube_dimension": 0.0516128
+  },
+  "reconstruction_dimensions_m": {
+    "main_octagon_width": 0.08,
+    "corner_flat_coordinate": 0.018,
+    "valve_center_distance": 0.03,
+    "valve_trim_outer_diameter": 0.0212,
+    "valve_trim_inner_diameter": 0.0148,
+    "ear_width": 0.018,
+    "ear_thickness": 0.004,
+    "ear_bore_diameter": 0.0034,
+    "tube_outer_diameter": 0.0064,
+    "tube_inner_diameter": 0.0042
+  },
+  "mount_hole_xy_m": [
+    [
+      -0.0053,
+      0.0436
+    ],
+    [
+      0.0053,
+      0.0436
+    ],
+    [
+      -0.0436,
+      -0.005299999999999997
+    ],
+    [
+      -0.0436,
+      0.005300000000000003
+    ],
+    [
+      0.005299999999999995,
+      -0.0436
+    ],
+    [
+      -0.005300000000000005,
+      -0.0436
+    ],
+    [
+      0.0436,
+      0.005299999999999992
+    ],
+    [
+      0.0436,
+      -0.005300000000000008
+    ]
+  ],
+  "frames_m": {
+    "Mount": [
+      0,
+      0,
+      0
+    ],
+    "Mate": [
+      0,
+      0,
+      0.04826
+    ],
+    "FluidA": [
+      -0.015,
+      0,
+      0.04826
+    ],
+    "FluidB": [
+      0.015,
+      0,
+      0.04826
+    ]
+  },
+  "frame_scope": "research rear-body installation plane and front reference plane; manufacturer mating datums not supplied",
+  "valve_state": "visual closed valve seats; no fluid-transfer behavior",
+  "role": "passive service valve; matching active connector not included",
+  "collision_authored": false,
+  "standalone_rigid_body_authored": false,
+  "source_pdf": "source/rafti_DOC-00133A.pdf",
+  "source_image": "source/dimension_reference.png",
+  "mesh_objects": 37
+}

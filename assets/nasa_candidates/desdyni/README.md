@@ -4,6 +4,8 @@
 
 当前状态：已作为候选资产入库；没有注册 SRB 机器人类，没有替换当前逼近任务。原始模型保持不变，底部封板、储箱和 RAFTI 接口均尚未写入模型。封底方案位于 `bottom_closure_proposal.json` 和 `HANDOFF.md`。
 
+可复用的 RAFTI 被动接口参考资产位于 `assets/service_interfaces/rafti_rev_a_reference/`，提供独立 BLEND、USD 和挂载参考系。装到本模型上前，应确定米制尺度、封板安装点和后管净空。
+
 | 文件 | 用途 |
 |---|---|
 | `source/desdyni_nasa.glb` | 原始 NASA GLB |

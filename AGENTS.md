@@ -162,28 +162,6 @@ The desired future split is GPU for ACT/DP/SB3 neural-network forward/backward c
 
 Prioritize these NMPC/SRB tasks over unrelated RL training. They are planned work, not completed features. Research context: docs/src/workflows/nmpc_experiments_and_research_direction_20260909.md. Known model mismatch, KOZ sizing, fuel efficiency and P99 limits remain unresolved.
 
-### 1. Model and task consistency
-
-- Use true free-floating for new SRB experiments unless explicitly overridden; do not silently mix n=0.001027 and n=0.
-- Preserve the matched executor's actual wet/dry mass, fuel evolution, inertia, COM and 16-RCS mapping. Validate any new geometry, fuel distribution or executor behavior against real steps.
-- Pass absolute episode time for time-varying references. The current stationary matched experiment passes an explicit stationary COM reference and avoids reintegrating it from t=0 on each solve.
-- Derive KOZ geometry from vehicle dimensions, reference point, uncertainty, and approach phase. Radius 0.5 m is an experiment default, not a traced engineering specification.
-
-### 2. Expert quality and validation
-
-- Run horizon, braking-reference, and cost-weight ablations to reduce overshoot.
-- Stabilize the native large-attitude goal and record quality-gate rejection causes.
-- Add multiple initial states, velocities, attitudes, disturbances, and actuator/model perturbations.
-- Measure wall-clock P50/P99 with explicit delay; synchronous stepping is not a real-time guarantee.
-- Save actual closed-loop executed state/action sequences for demonstrations; predicted future actions are not necessarily later executed after feedback.
-
-### 3. Imitation learning
-
-- Establish single-step BC and fixed-chunk ACT baselines; add DP after ACT is reproducible.
-- Treat DAgger as a data-collection baseline, not automatically the contribution.
-- Study dynamics- and delay-aware action-prefix selection: execute the longest prefix that remains safe and recoverable, and query NMPC before braking/recovery feasibility is lost.
-- Compare fixed chunks, risk-triggered correction, adaptive horizon, safety filtering, and recoverability criteria under identical demonstrations and budgets.
-
 ## Checks
 
 CUDA visibility through Isaac Sim Python:
@@ -201,8 +179,6 @@ Vulkan is a separate check:
 Find decisive Kit messages:
 
     rg -n -i 'CUDA error|bad state|No device could|no suitable|GPU Foundation|vkCreateDevice|GLFW|GLInterop' /tmp/nmpc_*.log
-
-For RL experiments, read AGENTS-RL.md first and use scripts/srb_rl_agent.py where applicable. The --gpu/CUDA_VISIBLE_DEVICES examples in AGENTS-RL.md are historical RL workflow instructions, not proof that masked Kit initialization is currently reliable. Inspect that entry point before adapting GPU selection; do not blindly transfer the NMPC command or force env.sim.device=cuda. This update does not change the RL entry point.
 
 ## Reporting requirements
 
