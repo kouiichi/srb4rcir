@@ -5,6 +5,7 @@ never steps physics, submits forces, resets actors, or alters their materials.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -31,6 +32,25 @@ def refresh_camera(camera):
     camera.update(0.0, force_recompute=True)
 
 
+class _CameraReadback:
+    """Select Replicator transfer buffers while Camera still owns CPU tensors."""
+    def __init__(self, annotator, device):
+        self.annotator, self.device = annotator, device
+
+    def get_data(self):
+        return self.annotator.get_data(device=self.device)
+
+    def detach(self, render_products):
+        return self.annotator.detach(render_products)
+
+
+def set_camera_readback_device(camera, device):
+    # Isaac Lab 2.1 converts annotator output to camera.device before storing it.
+    # This changes transfer buffers without changing environment/PhysX devices.
+    for name, annotators in camera._rep_registry.items():
+        camera._rep_registry[name] = [_CameraReadback(annotator, device) for annotator in annotators]
+
+
 def camera_mount_transform(stage, camera_schema):
     """Resolve the concrete schema and the moving rigid-body ancestor."""
     from pxr import UsdGeom, UsdPhysics
@@ -47,8 +67,9 @@ def camera_mount_transform(stage, camera_schema):
 def publish_initial_visual_poses(env):
     """Author the already-set physical poses without a physics/control step.
 
-    Used only at initialization in the CPU/USD rendering path. Subsequent
-    PhysX steps publish USD normally. No force, velocity or property is set.
+    These direct USD writes can be interpreted as teleportation by PhysX and
+    clear initial velocities when rendering processes the change notices.
+    Use PhysX transformation publication when initial velocities must survive.
     """
     from pxr import Usd, UsdGeom, UsdPhysics
     from .orbit_lighting import captured_world_transform
@@ -185,13 +206,17 @@ def save_partial_execution(output, states, duties, refs, solve_times, solver_rec
 
 
 class ReplayVisualCapture:
-    def __init__(self, env, output, camera, dt):
+    def __init__(self, env, output, camera, dt, *, stream=False, readback_device='cpu'):
         import omni.replicator.core as rep
         from isaacsim.core.utils.semantics import add_update_semantics
         from pxr import Usd, UsdGeom, UsdPhysics
         from srb.nmpc.surface_approach import read_actor_mesh
 
         self.env, self.output, self.camera, self.dt = env, Path(output), camera, dt
+        self.readback_device = readback_device
+        if readback_device != 'cpu':
+            set_camera_readback_device(camera, readback_device)
+        self.stream = stream
         self.frames = []
         self.rgb, self.depth, self.masks = [], [], []
         self.annotations = {}
@@ -236,12 +261,19 @@ class ReplayVisualCapture:
             origin="opengl", target="world"))[0]
         for folder in ("onboard", "overview", "paired", "static"):
             (self.output/folder).mkdir(parents=True, exist_ok=True)
+        if stream:
+            for folder in ("depth", "masks"):
+                (self.output/folder).mkdir(parents=True, exist_ok=True)
         write_json(self.output/"capture_config.json", {
             "onboard_prim": str(camera_prim.GetPath()),
             "body_paths": body_paths,
             "onboard_mount_position_root_m": self.mount_position,
             "onboard_mount_quaternion_world_convention_wxyz": self.mount_quaternion,
             "onboard_resolution": [camera.cfg.width, camera.cfg.height],
+            "storage": "indexed lossless RGB PNG, metric depth NPZ and semantic mask PNG" if stream else "in-memory arrays and observations.npz",
+            "png_compress_level": 1,
+            "camera_readback_device": readback_device,
+            "camera_tensor_device": str(camera.device),
             "overview_prim": env.cfg.viewer.cam_prim_path,
             "overview_eye": env.cfg.viewer.eye, "overview_lookat": env.cfg.viewer.lookat,
             "overview_resolution": env.cfg.viewer.resolution,
@@ -257,16 +289,34 @@ class ReplayVisualCapture:
             "fabric_force_update_available": hasattr(env.sim._fabric_iface, 'force_update'),
         })
 
+    def set_mount_state(self, position_B, quaternion_BC, metadata=None):
+        """Set expected extrinsics from the independent mount controller."""
+        self.mount_position = numpy(position_B)
+        self.mount_quaternion = numpy(quaternion_BC)
+        self.mount_metadata = deepcopy(metadata or {})
+
     def settle(self, frames=8):
         for _ in range(frames):
             self.env.sim.render()
         refresh_camera(self.camera)
+        if self.readback_device != 'cpu':
+            from isaaclab.utils.array import convert_to_torch
+            checks = {}
+            for name, annotators in self.camera._rep_registry.items():
+                for i, adapter in enumerate(annotators):
+                    cpu = numpy(adapter.annotator.get_data(device='cpu'))
+                    transferred = numpy(convert_to_torch(adapter.get_data(), device=self.camera.device))
+                    checks[f'{name}_{i}'] = {'shape': list(cpu.shape), 'dtype': str(cpu.dtype),
+                                            'pixels_identical': bool(cpu.size and np.array_equal(cpu, transferred, equal_nan=True))}
+            write_json(self.output/'readback_check.json', checks)
+            if not all(item['pixels_identical'] for item in checks.values()):
+                raise RuntimeError('CPU/CUDA camera readback pixel comparison failed')
 
     def images(self):
         data = self.camera.data
-        rgb = numpy(data.output["rgb"][0])[..., :3].copy()
+        rgb = numpy(data.output["rgb"][0][..., :3])
         depth_key = "depth" if "depth" in data.output else "distance_to_image_plane"
-        depth = numpy(data.output[depth_key][0]).copy()
+        depth = numpy(data.output[depth_key][0])
         overview = np.asarray(self.env.render()).copy()
         return rgb, depth, overview
 
@@ -355,6 +405,9 @@ class ReplayVisualCapture:
             "robot_root_state_w": numpy(r.root_state_w[0]), "target_root_state_w": numpy(t.root_state_w[0]),
             "camera_pos_w": pos, "camera_quat_w": quat, "intrinsic": intrinsic,
             "expected_camera_pos_w": expected_pos,
+            "camera_mount_position_B_m": self.mount_position.copy(),
+            "camera_mount_quaternion_BC_wxyz": self.mount_quaternion.copy(),
+            "gimbal": deepcopy(getattr(self, 'mount_metadata', {})),
             "camera_position_error_m": float(np.linalg.norm(pos-expected_pos)),
             "camera_orientation_error_deg": float(np.rad2deg(np.arccos(np.clip((np.trace(error_rotation)-1)/2, -1, 1)))),
             "target_roi": summarize_roi(rgb, target_mask),
@@ -369,7 +422,7 @@ class ReplayVisualCapture:
         refresh_camera(self.camera)
         rgb, depth, overview = self.images()
         # Save raw evidence before segmentation or geometric analysis can fail.
-        imageio.imwrite(self.output/"onboard"/f"frame_{step:04d}.png", rgb)
+        imageio.imwrite(self.output/"onboard"/f"frame_{step:04d}.png", rgb, compress_level=1)
         self.last_overview = (step, overview)
         try:
             frame, target_mask = self._frame_metadata(step, measured_state, rgb, overview)
@@ -386,9 +439,13 @@ class ReplayVisualCapture:
                 'target_root_state_w': numpy(self.env._target.data.root_state_w[0]),
             })
             raise
-        self.rgb.append(rgb)
-        self.depth.append(depth)
-        self.masks.append(target_mask)
+        if getattr(self, 'stream', False):
+            np.savez_compressed(self.output/"depth"/f"frame_{step:04d}.npz", depth=depth)
+            imageio.imwrite(self.output/"masks"/f"frame_{step:04d}.png", target_mask.astype(np.uint8), compress_level=1)
+        else:
+            self.rgb.append(rgb)
+            self.depth.append(depth)
+            self.masks.append(target_mask)
         self.frames.append(frame)
         # Overview keyframes each second, plus events. Always retain the last
         # rendered frame so finalize can save it after a solver rejection.
@@ -402,7 +459,7 @@ class ReplayVisualCapture:
 
     def save_overview(self, step, overview):
         import imageio.v2 as imageio
-        imageio.imwrite(self.output/"overview"/f"frame_{step:04d}.png", overview)
+        imageio.imwrite(self.output/"overview"/f"frame_{step:04d}.png", overview, compress_level=1)
         write_json(self.output/"overview"/f"frame_{step:04d}.json", {
             "capture_id": step, "time_s": step*self.dt,
             "camera_params": self.annotations["overview"][1].get_data(),
@@ -412,15 +469,24 @@ class ReplayVisualCapture:
         if not self.frames:
             return
         self.save_overview(*self.last_overview)
-        np.savez_compressed(self.output/"observations.npz", rgb=np.asarray(self.rgb),
-                            depth=np.asarray(self.depth), target_mask=np.asarray(self.masks),
-                            time_s=np.array([f["time_s"] for f in self.frames]),
-                            capture_id=np.array([f["capture_id"] for f in self.frames]),
-                            intrinsic=np.array([f["intrinsic"] for f in self.frames]),
-                            camera_pos_w=np.array([f["camera_pos_w"] for f in self.frames]),
-                            camera_quat_w=np.array([f["camera_quat_w"] for f in self.frames]),
-                            measured_state13=np.array([f["measured_state13"] for f in self.frames]),
-                            robot_root_state_w=np.array([f["robot_root_state_w"] for f in self.frames]),
-                            target_root_state_w=np.array([f["target_root_state_w"] for f in self.frames]))
+        arrays = {"time_s": np.array([f["time_s"] for f in self.frames]),
+                  "capture_id": np.array([f["capture_id"] for f in self.frames]),
+                  "intrinsic": np.array([f["intrinsic"] for f in self.frames]),
+                  "camera_pos_w": np.array([f["camera_pos_w"] for f in self.frames]),
+                  "camera_quat_w": np.array([f["camera_quat_w"] for f in self.frames]),
+                  "camera_mount_position_B_m": np.array([f['camera_mount_position_B_m'] for f in self.frames]),
+                  "camera_mount_quaternion_BC_wxyz": np.array([f['camera_mount_quaternion_BC_wxyz'] for f in self.frames]),
+                  "gimbal_angles_rad": np.array([f['gimbal'].get('angles_rad', [np.nan, np.nan]) for f in self.frames]),
+                  "gimbal_rates_rad_s": np.array([f['gimbal'].get('rates_rad_s', [np.nan, np.nan]) for f in self.frames]),
+                  "measured_state13": np.array([f["measured_state13"] for f in self.frames]),
+                  "robot_root_state_w": np.array([f["robot_root_state_w"] for f in self.frames]),
+                  "target_root_state_w": np.array([f["target_root_state_w"] for f in self.frames])}
+        if getattr(self, 'stream', False):
+            for key, directory, suffix in (("rgb_files", "onboard", "png"),
+                                           ("depth_files", "depth", "npz"), ("mask_files", "masks", "png")):
+                arrays[key] = np.asarray([f"{directory}/frame_{f['capture_id']:04d}.{suffix}" for f in self.frames])
+        else:
+            arrays.update(rgb=np.asarray(self.rgb), depth=np.asarray(self.depth), target_mask=np.asarray(self.masks))
+        np.savez_compressed(self.output/"observations.npz", **arrays)
         write_json(self.output/"capture_frames.json", self.frames)
         write_json(self.output/"capture_checks.json", capture_checks(self.frames))

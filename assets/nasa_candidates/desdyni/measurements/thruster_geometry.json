@@ -1,0 +1,116 @@
+{
+  "source": "NASA DESDynI original visual geometry",
+  "selection": "connected components using material DESDYNI-thrusters.003",
+  "coordinate_units": "uncalibrated source coordinates",
+  "identified_nozzle_count": 4,
+  "direction_interpretation": "wide mouth minus narrow throat is exhaust; ThrustAction applies opposite force",
+  "nominal_exhaust_axis": [
+    0.0,
+    0.0,
+    1.0
+  ],
+  "axis_fit_note": "Nominal +Z exhaust approximation: fitted transverse components below 2e-5 are not treated as verified lateral control authority.",
+  "scope": "nozzle geometry in this visual model; not a complete flight RCS specification",
+  "nozzles": [
+    {
+      "material": "DESDYNI-thrusters.003",
+      "vertices": 48,
+      "mouth_position": [
+        0.4150211364030838,
+        -1.1100308299064636,
+        5.100318908691406
+      ],
+      "throat_position": [
+        0.41500698029994965,
+        -1.1100308497746785,
+        4.346734046936035
+      ],
+      "exhaust_direction": [
+        1.8785015265146003e-05,
+        2.6364933607251042e-08,
+        0.9999999998235611
+      ],
+      "mouth_radius": 0.24000948779041573,
+      "throat_radius": 0.05759419022644296,
+      "ring_vertex_counts": [
+        24,
+        24
+      ]
+    },
+    {
+      "material": "DESDYNI-thrusters.003",
+      "vertices": 48,
+      "mouth_position": [
+        1.1150552332401276,
+        -0.37002107004324597,
+        5.100318908691406
+      ],
+      "throat_position": [
+        1.1150552332401276,
+        -0.3700210650761922,
+        4.346734046936035
+      ],
+      "exhaust_direction": [
+        0.0,
+        -6.591233476638484e-09,
+        1.0
+      ],
+      "mouth_radius": 0.24001176018666057,
+      "throat_radius": 0.05760783737259325,
+      "ring_vertex_counts": [
+        24,
+        24
+      ]
+    },
+    {
+      "material": "DESDYNI-thrusters.003",
+      "vertices": 48,
+      "mouth_position": [
+        -0.4849620933334033,
+        1.1700256715218227,
+        5.100318908691406
+      ],
+      "throat_position": [
+        -0.48494796206553775,
+        1.1700256516536076,
+        4.346734046936035
+      ],
+      "exhaust_direction": [
+        -1.8752059098074876e-05,
+        2.636493390191845e-08,
+        0.9999999998241798
+      ],
+      "mouth_radius": 0.24003024456705327,
+      "throat_radius": 0.057583455923495175,
+      "ring_vertex_counts": [
+        24,
+        24
+      ]
+    },
+    {
+      "material": "DESDYNI-thrusters.003",
+      "vertices": 48,
+      "mouth_position": [
+        -1.184996212522189,
+        0.43004415432612103,
+        5.100318908691406
+      ],
+      "throat_position": [
+        -1.1849961926539738,
+        0.4300300156076749,
+        4.346734046936035
+      ],
+      "exhaust_direction": [
+        -2.636493390191356e-08,
+        1.8761945948210955e-05,
+        0.9999999998239943
+      ],
+      "mouth_radius": 0.2400117498004638,
+      "throat_radius": 0.057600761947814466,
+      "ring_vertex_counts": [
+        24,
+        24
+      ]
+    }
+  ]
+}

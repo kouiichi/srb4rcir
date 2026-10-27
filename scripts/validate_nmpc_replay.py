@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 import os
 import shlex
 import sys
@@ -40,6 +41,13 @@ def jsonable(value):
 
 def save_json(path, value):
     path.write_text(json.dumps(jsonable(value), indent=2, allow_nan=False) + "\n")
+
+
+def _to_numpy(value):
+    """Convert an Isaac tensor or array to a detached CPU NumPy array."""
+    if hasattr(value, "detach"):
+        value = value.detach().cpu().numpy()
+    return np.asarray(value)
 
 
 def warm_after_prefix(result, consumed, previous_duty):
@@ -236,7 +244,21 @@ def replay(args):
         'OMP_NUM_THREADS': os.environ.get('OMP_NUM_THREADS'),
         'OPENBLAS_NUM_THREADS': os.environ.get('OPENBLAS_NUM_THREADS'),
         'kit_device': args.device, 'seed': args.seed,
+        'started_at_utc': datetime.now(timezone.utc).isoformat(),
     })
+    if args.orbit_lighting_trial:
+        from srb.visual.replay_capture import gpu_preflight
+        preflight = gpu_preflight()
+        save_json(args.output / 'gpu_preflight.json', preflight)
+        if not preflight['usable']:
+            save_json(args.output / 'runtime_error.json', {
+                'type': 'GPUAccessUnavailable',
+                'message': 'RTX trial requires accessible CUDA devices; see gpu_preflight.json. No physics/control steps or images were produced.',
+                'requested_steps': 0 if args.orbit_static_only else (args.steps or len(duties)),
+                'executed_steps': 0,
+            })
+            print('RTX trial blocked: CUDA device access unavailable; see gpu_preflight.json', flush=True)
+            return 1
     if args.physics_only:
         if args.video:
             raise ValueError('--physics-only does not support video')
@@ -249,10 +271,19 @@ def replay(args):
                             experience=SRB_APPS_DIR / ("srb.headless.rendering.kit" if args.video else "srb.headless.kit"))
     env = None
     writer = None
+    visual_capture = None
+    measured, executed, solve_times, solver_records, telemetry = [], [], [], [], []
     try:
         import torch
         from omni.physx import acquire_physx_interface
         from srb.tasks.mobile.rendezvous.task import Task16Rcs, Task16RcsCfg
+        if args.record_camera:
+            from srb.tasks.mobile.rendezvous.task_visual import VisualTask16Rcs, VisualTask16RcsCfg
+            task_base = VisualTask16Rcs
+            task_cfg_type = VisualTask16RcsCfg
+        else:
+            task_base = Task16Rcs
+            task_cfg_type = Task16RcsCfg
         from srb.core.sensor import ContactSensorCfg
         from srb.nmpc.rcs import rcs_matrix_from_task
         from srb.nmpc.quaternion import quaternion_to_rotation
@@ -263,7 +294,7 @@ def replay(args):
         # still uses the Kit GPU and must not select a different physics backend.
         force_cpu_physx = args.physics_only or args.matched_executor
         acquire_physx_interface().overwrite_gpu_setting(0 if force_cpu_physx else 1)
-        cfg = Task16RcsCfg()
+        cfg = task_cfg_type()
         if args.matched_executor:
             cfg.orbital_tidal_acceleration = False
         cfg.scene.num_envs = 2 if args.check_mass_reset else 1
@@ -271,15 +302,34 @@ def replay(args):
         cfg.viewer.eye = (-1.5, -6.0, 3.0)
         cfg.viewer.lookat = (-1.5, 0.0, 0.0)
         cfg.viewer.resolution = (960, 540)
+        if args.record_camera:
+            width, height = args.camera_resolution
+            cfg.camera_resolution = (width, height)
+            cfg.cameras_cfg["cam_onboard"].width = width
+            cfg.cameras_cfg["cam_onboard"].height = height
+            cfg.scene.cam_onboard.width = width
+            cfg.scene.cam_onboard.height = height
+            if args.camera_horizontal_fov is not None:
+                aperture = 2.0 * cfg.scene.cam_onboard.spawn.focal_length * np.tan(np.deg2rad(args.camera_horizontal_fov / 2.0))
+                cfg.scene.cam_onboard.spawn.horizontal_aperture = float(aperture)
+                cfg.cameras_cfg["cam_onboard"].spawn.horizontal_aperture = float(aperture)
         if args.surface_approach:
             cfg.viewer.eye = (-1.5, -3.2, 1.4)
             cfg.viewer.lookat = (-1.45, 0.0, 0.0)
-        if args.stable_video_lighting:
+        if args.stable_video_lighting or args.orbit_lighting_trial:
             # Keep the Earth backdrop and illumination fixed for evaluation
             # recordings; the default interval events can hide the vehicles.
             cfg.events.randomize_sunlight_orientation = None
             cfg.events.randomize_sunlight_intensity = None
             cfg.events.randomize_skydome_orientation = None
+        if args.orbit_lighting_trial:
+            # CPU PhysX -> USD publication avoids the observed split where
+            # camera/Fabric poses move but RTX meshes keep authored reset poses.
+            cfg.sim.use_fabric = False
+            cfg.events.randomize_sunlight_angular_diameter = None
+            cfg.events.randomize_sunlight_color_temperature = None
+            if hasattr(cfg.events, 'progress_sunlight_orientation'):
+                cfg.events.progress_sunlight_orientation = None
         if args.video:
             save_json(args.output / 'video_config.json', {
                 'fps': 1.0 / params.control_period_s,
@@ -298,7 +348,7 @@ def replay(args):
         if args.align_goal:
             cfg.target_offset_pos = tuple(refs[0, :3])
             cfg.target_offset_quat = tuple(refs[0, 6:10])
-        class AuditedTask(Task16Rcs):
+        class AuditedTask(task_base):
             def _setup_scene(self):
                 super()._setup_scene()
                 from pxr import Usd, UsdPhysics, PhysxSchema
@@ -324,6 +374,70 @@ def replay(args):
                 env._robot.root_physx_view.get_inertias().detach().cpu().numpy().copy(),
             )
         env.reset(seed=args.seed)
+        metallic_material_summary = None
+        segmented_material_summary = None
+        material_physics_before = {
+            "masses": _to_numpy(env._robot.root_physx_view.get_masses()).copy(),
+            "inertias": _to_numpy(env._robot.root_physx_view.get_inertias()).copy(),
+            "coms": _to_numpy(env._robot.root_physx_view.get_coms()).copy(),
+        }
+        if args.metallic_film_material:
+            from srb.visual.materials import apply_metallic_film_material
+            if args.orbit_lighting_trial:
+                from srb.visual.orbit_lighting import physics_snapshot
+                visual_setup_before = physics_snapshot(env)
+            metallic_material_summary = apply_metallic_film_material(
+                env.sim.stage,
+                ("/World/envs/env_0/robot", "/World/envs/env_0/target") if args.orbit_lighting_trial
+                else ("/World/envs/env_0/robot",),
+                material_path="/World/Materials/srb_metallic_film",
+            )
+            if args.orbit_lighting_trial:
+                material_full_after = physics_snapshot(env)
+                save_json(args.output / 'material_full_physics_invariance.json', {
+                    'before': visual_setup_before, 'after': material_full_after,
+                    'unchanged': visual_setup_before == material_full_after,
+                    'target_binding_note': 'same existing film parameters; original target baked albedo/metallic/roughness textures all zero',
+                })
+            material_physics_after = {
+                "masses": _to_numpy(env._robot.root_physx_view.get_masses()),
+                "inertias": _to_numpy(env._robot.root_physx_view.get_inertias()),
+                "coms": _to_numpy(env._robot.root_physx_view.get_coms()),
+            }
+            metallic_material_summary["physics_unchanged"] = all(
+                np.array_equal(material_physics_before[key], material_physics_after[key])
+                for key in material_physics_before
+            )
+            save_json(args.output / 'metallic_film_material.json', metallic_material_summary)
+        if args.segmented_satellite_materials:
+            from srb.visual.materials import apply_satellite_materials
+            if args.orbit_lighting_trial:
+                from srb.visual.orbit_lighting import physics_snapshot
+                visual_setup_before = physics_snapshot(env)
+            segmented_material_summary = apply_satellite_materials(
+                env.sim.stage,
+                ("/World/envs/env_0/robot", "/World/envs/env_0/target")
+                if args.orbit_lighting_trial
+                else ("/World/envs/env_0/robot",),
+                material_path="/World/Materials/srb_satellite_materials",
+            )
+            if args.orbit_lighting_trial:
+                material_full_after = physics_snapshot(env)
+                save_json(args.output / 'segmented_material_physics_invariance.json', {
+                    'before': visual_setup_before, 'after': material_full_after,
+                    'unchanged': visual_setup_before == material_full_after,
+                    'material_scope': 'satellite body and solar-panel face subset bindings',
+                })
+            material_physics_after = {
+                "masses": _to_numpy(env._robot.root_physx_view.get_masses()),
+                "inertias": _to_numpy(env._robot.root_physx_view.get_inertias()),
+                "coms": _to_numpy(env._robot.root_physx_view.get_coms()),
+            }
+            segmented_material_summary["physics_unchanged"] = all(
+                np.array_equal(material_physics_before[key], material_physics_after[key])
+                for key in material_physics_before
+            )
+            save_json(args.output / 'segmented_satellite_materials.json', segmented_material_summary)
         if args.video and args.video_fill_intensity:
             from pxr import Gf, UsdGeom, UsdLux
             # Evaluation-only illumination from both sides of the encounter.
@@ -332,7 +446,16 @@ def replay(args):
                 light = UsdLux.DistantLight.Define(env.sim.stage, f'/World/replay_fill_{index}')
                 light.CreateIntensityAttr(args.video_fill_intensity)
                 light.CreateAngleAttr(15.)
+                light.CreateExposureAttr(10.0)
                 UsdGeom.Xformable(light.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(65., yaw, 0.))
+            if args.record_camera:
+                # The onboard camera needs a stable environment light as well
+                # as the external evaluation lights. Rendering-only; this
+                # does not enter the physics or controller model.
+                dome = UsdLux.DomeLight.Define(env.sim.stage, '/World/replay_camera_fill')
+                dome.CreateIntensityAttr(args.video_fill_intensity)
+                dome.CreateExposureAttr(10.0)
+                dome.CreateColorAttr(Gf.Vec3f(1.0, 1.0, 1.0))
         if args.check_mass_reset:
             from check_thrust_mass_reset import check_mass_reset
             reset_check = check_mass_reset(env, constructor_properties)
@@ -358,6 +481,13 @@ def replay(args):
             asset.reset()
         if args.start is not None:
             states[0, :3] = args.start
+        if args.initial_linear_velocity is not None:
+            states[0, 3:6] = args.initial_linear_velocity
+        if args.initial_attitude_rpy_deg is not None:
+            from srb.utils.math import rpy_to_quat
+            states[0, 6:10] = rpy_to_quat(args.initial_attitude_rpy_deg)
+        if args.initial_angular_velocity is not None:
+            states[0, 10:13] = args.initial_angular_velocity
         target_position = np.asarray(args.target_position, dtype=float)
         target_state = np.array([*target_position, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0], dtype=float)
         # ``--start`` is the actor-root position relative to the target. The
@@ -379,7 +509,9 @@ def replay(args):
             target_points, target_faces, target_paths = read_actor_mesh(env.sim.stage, '/World/envs/env_0/target')
             top = largest_axis_face(actor_points, actor_faces, [0., 0., 1.])
             front = largest_axis_face(target_points, target_faces, [-1., 0., 0.])
-            goal_position, goal_quat = face_goal([0.,0.,0.], [1.,0.,0.,0.], front, top, .30)
+            goal_position, goal_quat = face_goal(
+                [0., 0., 0.], [1., 0., 0., 0.], front, top, args.surface_gap
+            )
             cfg.target_offset_pos = tuple(goal_position)
             cfg.target_offset_quat = tuple(goal_quat)
             env._target_offset_pos[:] = torch.as_tensor(goal_position, dtype=torch.float32, device=env.device)
@@ -394,7 +526,7 @@ def replay(args):
                 'initial_actor_world_root_position_m': target_position + states[0, :3],
                 'initial_actor_target_distance_m': float(np.linalg.norm(states[0, :3])),
                 'front_definition': 'target -X bus face, panels extend along +/-Y; actor top is +Z',
-                'desired_bus_face_gap_m': .30, 'minimum_mesh_plane_gap_m': .02,
+                'desired_bus_face_gap_m': args.surface_gap, 'minimum_mesh_plane_gap_m': .02,
                 'koz_radius_m': params.koz_radius_m,
                 'koz_definition': 'target full-mesh maximum vertex radius; additional full-mesh plane rejection guard',
                 'guard_scope': 'all predicted nodes before accepting a prefix and all measured control samples; not continuous collision checking',
@@ -443,6 +575,129 @@ def replay(args):
         if args.video:
             import imageio.v2 as imageio
             writer = imageio.get_writer(args.output / "replay.mp4", fps=20, codec="libx264", quality=7, macro_block_size=2)
+        camera = env.scene.sensors.get("cam_onboard") if args.record_camera else None
+        camera_rgb_frames = []
+        camera_depth_frames = []
+        camera_quality_frames = []
+        camera_times = []
+        camera_positions_w = []
+        camera_quaternions_w = []
+        camera_intrinsics = []
+        camera_robot_states_w = []
+        camera_target_states_w = []
+
+        def record_camera_frame(time_s):
+            if camera is None:
+                return
+            from srb.visual.camera_quality import (
+                extract_rgb_depth,
+                project_target_visible,
+                camera_frame_target_visible,
+                summarize_camera_frame,
+            )
+            output = {
+                key: _to_numpy(value[0] if getattr(value, "ndim", 0) > 0 and value.shape[0] else value)
+                for key, value in camera.data.output.items()
+            }
+            rgb, depth = extract_rgb_depth(output)
+            # Annotator buffers may be reused on the next render.
+            camera_rgb_frames.append(rgb.copy())
+            camera_depth_frames.append(depth.copy())
+            camera_times.append(float(time_s))
+            position = getattr(camera.data, "pos_w", None)
+            quaternion = getattr(camera.data, "quat_w_world", None)
+            camera_positions_w.append(
+                _to_numpy(position[0]).copy() if position is not None else np.full(3, np.nan)
+            )
+            camera_quaternions_w.append(
+                _to_numpy(quaternion[0]).copy() if quaternion is not None else np.full(4, np.nan)
+            )
+            intrinsic = getattr(camera.data, "intrinsic_matrices", None)
+            camera_intrinsics.append(
+                _to_numpy(intrinsic[0]).copy() if intrinsic is not None else np.full((3, 3), np.nan)
+            )
+            camera_robot_states_w.append(_to_numpy(env._robot.data.root_state_w[0]).copy())
+            camera_target_states_w.append(_to_numpy(env._target.data.root_state_w[0]).copy())
+            target_visible = None
+            view_projection = getattr(camera.data, "view_projection_matrices", None)
+            if view_projection is not None:
+                matrix = _to_numpy(view_projection[0])
+                target = _to_numpy(env._target.data.root_pos_w[0])
+                target_visible = project_target_visible(
+                    target, matrix, rgb.shape[1], rgb.shape[0]
+                )
+            elif position is not None and quaternion is not None:
+                intrinsic = getattr(camera.data, "intrinsic_matrices", None)
+                if intrinsic is not None:
+                    target_visible = camera_frame_target_visible(
+                        _to_numpy(env._target.data.root_pos_w[0]),
+                        _to_numpy(position[0]),
+                        _to_numpy(quaternion[0]),
+                        _to_numpy(intrinsic[0]),
+                        rgb.shape[1],
+                        rgb.shape[0],
+                    )
+            camera_quality_frames.append(
+                summarize_camera_frame(
+                    rgb,
+                    depth,
+                    clipping_range=cfg.cameras_cfg["cam_onboard"].spawn.clipping_range,
+                    target_visible=target_visible,
+                )
+            )
+
+        if camera is not None:
+            # Warm up RTX and refresh the camera after manually placing actors.
+            # Rendering does not advance physics or consume a control action.
+            if args.orbit_lighting_trial:
+                from srb.visual.replay_capture import publish_initial_visual_poses
+                from srb.visual.orbit_lighting import physics_snapshot
+                publish_before = physics_snapshot(env)
+                publish_initial_visual_poses(env)
+                publish_after = physics_snapshot(env)
+                save_json(args.output / 'initial_pose_publication_invariance.json', {
+                    'before': publish_before, 'after': publish_after,
+                    'unchanged': publish_before == publish_after,
+                })
+            for _ in range(8):
+                env.sim.render()
+            from srb.visual.replay_capture import refresh_camera
+            refresh_camera(camera)
+            if args.orbit_lighting_trial:
+                from srb.visual.replay_capture import ReplayVisualCapture
+                from srb.visual.orbit_lighting import OrbitLightingConfig, OrbitLightingTrial, physics_snapshot
+                visual_capture = ReplayVisualCapture(env, args.output, camera, params.control_period_s)
+                lighting = OrbitLightingTrial(env, visual_capture, OrbitLightingConfig(
+                    sun_intensity=args.orbit_sun_intensity, earth_intensity=args.orbit_earth_intensity,
+                    sun_direction_to_source=tuple(args.orbit_sun_direction),
+                    exposure_time_s=args.orbit_exposure_time, f_number=args.orbit_f_number))
+                lighting.install()
+                # Fixed state, cameras, exposure and unchanged materials in all
+                # three comparisons. No env.step/sim.step during this section.
+                profiles = args.orbit_static_profiles or ('original', 'sun_only', 'sun_earth')
+                for profile in profiles:
+                    lighting.capture_profile(profile)
+                if args.orbit_calibrate:
+                    lighting.calibrate()
+                    lighting.compare_fov()
+                if args.orbit_static_profiles:
+                    lighting.set_profile(profiles[0])
+                visual_capture.settle(20)
+                visual_capture.snapshot('final_scene')
+                lighting.save()
+                visual_capture.record(0, state())
+                if args.orbit_static_only:
+                    visual_capture.finalize()
+                    save_json(args.output / 'static_report.json', {
+                        'requested_control_steps': 0, 'executed_control_steps': 0,
+                        'physics_time_s': float(env.sim.current_time),
+                        'physics_unchanged': lighting.before == physics_snapshot(env),
+                        'camera_sync': visual_capture.frames[0],
+                        'seed': args.seed, 'kit_device': args.device,
+                        'physics_only': False, 'env_device': str(env.device),
+                    })
+                    return 0
+            record_camera_frame(0.0)
         expert = None
         executor_model = None
         matched_parameters = []
@@ -535,12 +790,6 @@ def replay(args):
                                 (k+np.arange(params.horizon_steps+1))*params.control_period_s,
                                 states[0,:3], states[0,6:10], cfg.target_offset_pos, cfg.target_offset_quat,
                                 com, args.surface_sync)
-                        elif args.surface_stages:
-                            from srb.nmpc.surface_approach import staged_reference
-                            horizon_reference = staged_reference(
-                                (k+np.arange(params.horizon_steps+1))*params.control_period_s,
-                                states[0,:3], states[0,6:10], cfg.target_offset_pos, cfg.target_offset_quat,
-                                com, *args.surface_stages)
                         if horizon_reference is not None:
                             solver_references.append(horizon_reference.copy())
                         pending = expert.solve(measured[-1], task_params=params, warm_start=warm,
@@ -577,6 +826,20 @@ def replay(args):
                 executed.append(duty.copy())
                 output = env.step(torch.as_tensor(duty[None, :], dtype=torch.float32, device=env.device))
                 measured.append(state())
+                if camera is not None:
+                    if args.orbit_lighting_trial:
+                        # Standalone CPU fetch_results does not itself publish
+                        # USD transforms in the no-physics render update.
+                        acquire_physx_interface().update_transformations(False, True, False)
+                    env.sim.render()
+                    if visual_capture is not None:
+                        # A second render at the same physical time flushes the
+                        # first post-step camera orientation publication too.
+                        env.sim.render()
+                        visual_capture.record(k + 1, measured[-1])
+                    else:
+                        refresh_camera(camera)
+                    record_camera_frame((k + 1) * params.control_period_s)
                 if term.record_execution:
                     telemetry.append({key: numpy(value) for key, value in term.last_execution.items()})
                 success_seen |= bool(env._success_once[0].item())
@@ -635,12 +898,13 @@ def replay(args):
                        "all_planned_commands_executed": len(executed) == len(duties),
                        "max_position_deviation_from_plan_m": None if args.closed_loop else np.max(np.linalg.norm(measured[:, :3] - states[:len(measured), :3], axis=1)),
                        "final_mass_kg": numpy(view.get_masses()), "fuel_remaining_kg": numpy(term.remaining_fuel),
-                       "goal_aligned_for_this_run": args.align_goal, "physics_only": args.physics_only})
+                       "goal_aligned_for_this_run": args.align_goal, "physics_only": args.physics_only,
+                       "surface_gap_m": args.surface_gap if args.surface_approach else None})
         if surface is not None:
             samples = [surface_sample(x, com, **surface) for x in measured]
             series = {key: np.asarray([s[key] for s in samples]) for key in samples[0]}
             angles = 2*np.arccos(np.clip(np.abs((measured[:,6:10] / np.linalg.norm(measured[:,6:10],axis=1)[:,None]) @ goal[6:10]),0,1))
-            good = ((np.abs(series['face_gap_m']-.30) < .02) & (series['lateral_error_m'] < .02)
+            good = ((np.abs(series['face_gap_m'] - args.surface_gap) < .02) & (series['lateral_error_m'] < .02)
                     & (angles < np.deg2rad(5)) & (np.linalg.norm(measured[:,3:6],axis=1) < .05)
                     & (np.linalg.norm(measured[:,10:13],axis=1) < .05))
             streak, longest = 0, 0
@@ -651,7 +915,7 @@ def replay(args):
                 'final': samples[-1], 'min_mesh_plane_gap_m': float(series['mesh_plane_gap_m'].min()),
                 'final_hold_s': max(0,streak-1)*params.control_period_s,
                 'longest_hold_s': max(0,longest-1)*params.control_period_s,
-                'criteria': 'bus face gap 0.30 +/-0.02 m, lateral <0.02 m, full attitude <5 deg, speed <0.05 m/s, angular speed <0.05 rad/s for final >=1 s',
+                'criteria': f'bus face gap {args.surface_gap:.2f} +/-0.02 m, lateral <0.02 m, full attitude <5 deg, speed <0.05 m/s, angular speed <0.05 rad/s for final >=1 s',
             }
             result['generic_hover_complete_success'] = result['complete_success']
             result['complete_success'] = (len(executed) == len(duties) and stopped is None and failure is None
@@ -659,10 +923,81 @@ def replay(args):
                                            and surface_result['min_mesh_plane_gap_m'] >= .02
                                            and max_contact_force <= 1e-4)
             result['surface_approach'] = surface_result
-            result['surface_reference_stages_s'] = args.surface_stages
             result['surface_reference_sync_s'] = args.surface_sync
             np.savez_compressed(args.output / 'surface_metrics.npz', **series, success_sample=good)
         save_json(args.output / "replay.json", result)
+        if visual_capture is not None:
+            from srb.visual.orbit_lighting import physics_snapshot
+            save_json(args.output / 'physics_after_run.json', physics_snapshot(env))
+            save_json(args.output / 'render_after_run.json', {
+                'settings': lighting.runtime_settings(),
+                'sun_intensity': lighting.sun.GetIntensityAttr().Get(),
+                'earth_intensity': lighting.earth.GetIntensityAttr().Get(),
+                'original_light_intensities': [light.GetIntensityAttr().Get() for light, _ in lighting.original_lights],
+            })
+            visual_capture.finalize()
+            result['orbit_lighting_trial'] = True
+            result['observation_frames'] = len(visual_capture.frames)
+            save_json(args.output / 'replay.json', result)
+        if metallic_material_summary is not None:
+            result['metallic_film_material'] = metallic_material_summary
+            save_json(args.output / "replay.json", result)
+        if segmented_material_summary is not None:
+            result['segmented_satellite_materials'] = segmented_material_summary
+            save_json(args.output / "replay.json", result)
+        if camera_quality_frames:
+            from srb.visual.camera_quality import aggregate_camera_quality
+            camera_quality = {
+                **aggregate_camera_quality(camera_quality_frames),
+                "resolution": list(args.camera_resolution),
+                "data_types": ["rgb", "depth"],
+                "frame_source": "fixed onboard cam_onboard sensor",
+                "target_visibility_method": "camera_frame_or_view_projection_target_center",
+                "metallic_film_material": bool(args.metallic_film_material),
+                "segmented_satellite_materials": bool(args.segmented_satellite_materials),
+                "warmup_render_frames": 8,
+                "visibility_scope": "target center in frustum; does not establish lack of occlusion",
+            }
+            camera_quality["checks"] = {
+                "no_material_highlight_overexposure": camera_quality["overexposed_fraction_max"] <= 0.01,
+                "target_center_visibility_ge_95_percent": (
+                    camera_quality["target_visible_fraction"] is not None
+                    and camera_quality["target_visible_fraction"] >= 0.95
+                ),
+                "depth_present": camera_quality["depth_valid_fraction_mean"] > 0.0,
+                "brightness_usable": (
+                    all(f['target_roi']['pixel_count'] > 0 and f['target_roi']['underexposed_fraction'] < .95
+                        for f in visual_capture.frames) if visual_capture is not None
+                    else camera_quality["underexposed_fraction_mean"] < 0.95
+                ),
+            }
+            if visual_capture is not None:
+                from srb.visual.replay_capture import capture_checks
+                camera_quality['target_roi_checks'] = capture_checks(visual_capture.frames)
+                camera_quality['brightness_evaluation_scope'] = 'semantic target mask; full-image brightness retained as legacy diagnostics'
+                camera_quality['checks'].pop('no_material_highlight_overexposure')
+            save_json(args.output / 'camera_quality.json', {
+                "summary": camera_quality,
+                "frames": camera_quality_frames,
+            })
+            np.savez_compressed(
+                args.output / 'camera.npz',
+                rgb=np.asarray(camera_rgb_frames),
+                depth=np.asarray(camera_depth_frames),
+                time_s=np.asarray(camera_times),
+                camera_pos_w=np.asarray(camera_positions_w),
+                camera_quat_w=np.asarray(camera_quaternions_w),
+                intrinsic=np.asarray(camera_intrinsics),
+                robot_state_w=np.asarray(camera_robot_states_w),
+                target_state_w=np.asarray(camera_target_states_w),
+                target_visible=np.asarray([
+                    1 if f.get('target_visible') is True else
+                    0 if f.get('target_visible') is False else -1
+                    for f in camera_quality_frames
+                ], dtype=np.int8),
+            )
+            result['camera_quality'] = camera_quality
+            save_json(args.output / "replay.json", result)
         if telemetry:
             np.savez_compressed(args.output / 'executor.npz',
                                 **{key: np.asarray([r[key] for r in telemetry]) for key in telemetry[0]})
@@ -692,6 +1027,17 @@ def replay(args):
         # displayed. Persist it before closing the app, including interrupts.
         import traceback
         save_json(args.output / 'runtime_error.json', {'type': type(exc).__name__, 'message': str(exc), 'traceback': traceback.format_exc()})
+        if len(measured) > 0:
+            from srb.visual.replay_capture import save_partial_execution
+            try:
+                save_partial_execution(args.output, measured, executed, refs, solve_times, solver_records, telemetry)
+            except Exception as partial_exc:
+                save_json(args.output / 'partial_save_error.json', {'message': repr(partial_exc)})
+        if visual_capture is not None and visual_capture.frames:
+            try:
+                visual_capture.finalize()
+            except Exception as capture_exc:
+                save_json(args.output / 'capture_save_error.json', {'message': repr(capture_exc)})
         traceback.print_exc()
         raise
     finally:
@@ -721,6 +1067,27 @@ def main():
                    help='Disable sunlight/skydome randomization for readable evaluation video')
     r.add_argument('--video-fill-intensity', type=float, default=0.,
                    help='Optional pair of soft distant fill lights for readable video; rendering only')
+    r.add_argument('--record-camera', action='store_true',
+                   help='Instantiate the fixed onboard camera and save raw RGB/depth frames')
+    r.add_argument('--camera-resolution', nargs=2, type=int, default=(64, 64), metavar=('WIDTH', 'HEIGHT'),
+                   help='Onboard camera resolution when --record-camera is enabled')
+    r.add_argument('--metallic-film-material', action='store_true',
+                   help='Bind the adjusted warm metallic-film visual material to executing robot meshes')
+    r.add_argument('--segmented-satellite-materials', action='store_true',
+                   help='Bind adjusted gold-film body and blue solar-panel materials to Cubesat face subsets')
+    r.add_argument('--orbit-lighting-trial', action='store_true',
+                   help='Opt-in fixed single Sun + directional Earth disk; synchronized PNG/metadata capture')
+    r.add_argument('--orbit-calibrate', action='store_true', help='Static grayboard light and exposure sweeps before control')
+    r.add_argument('--orbit-static-only', action='store_true', help='Static rendered comparisons and calibration, no physics/control steps')
+    r.add_argument('--orbit-sun-intensity', type=float, default=50000., help='Solar light renderer scale, not W/m^2')
+    r.add_argument('--orbit-sun-direction', nargs=3, type=float, default=(-1., -.6, .8), metavar=('X', 'Y', 'Z'),
+                   help='World direction toward the Sun, normalized at runtime; emission has opposite direction')
+    r.add_argument('--orbit-static-profiles', nargs='+', choices=('original', 'sun_only', 'sun_earth', 'earth_only', 'lights_off'),
+                   help='Static-only light comparisons; final scene uses the first selected profile')
+    r.add_argument('--orbit-earth-intensity', type=float, default=500., help='Directional Earth disk renderer scale')
+    r.add_argument('--orbit-exposure-time', type=float, default=.004, help='Fixed RTX tone-map exposure time [s]')
+    r.add_argument('--orbit-f-number', type=float, default=8., help='Fixed RTX exposure aperture')
+    r.add_argument('--camera-horizontal-fov', type=float, help='Optional horizontal field of view [deg]; does not change the task')
     r.add_argument('--physics-only', action='store_true', help='Explicit CPU PhysX validation without waiting for an RTX viewport')
     r.add_argument('--closed-loop', action='store_true', help='Replan from measured PhysX state after each executed prefix')
     r.add_argument('--device', default='cuda:0', help='AppLauncher GPU; env tensor backend stays unchanged')
@@ -734,6 +1101,12 @@ def main():
     r.add_argument('--jerk-weight', type=float, default=0., help='Optional normalized world COM jerk cost weight')
     r.add_argument('--jerk-scale', type=float, default=.1, help='Fixed jerk normalization [m/s^3]')
     r.add_argument('--start', nargs=3, type=float)
+    r.add_argument('--initial-linear-velocity', nargs=3, type=float, metavar=('VX', 'VY', 'VZ'),
+                   help='Override initial actor-target relative linear velocity [m/s]')
+    r.add_argument('--initial-attitude-rpy-deg', nargs=3, type=float, metavar=('ROLL', 'PITCH', 'YAW'),
+                   help='Override initial actor attitude relative to the target [deg]')
+    r.add_argument('--initial-angular-velocity', nargs=3, type=float, metavar=('WX', 'WY', 'WZ'),
+                   help='Override initial body angular velocity [rad/s]')
     r.add_argument('--target-position', nargs=3, type=float, default=[0., 0., 0.],
                    help='Target actor world position; controller state remains target-relative')
     r.add_argument('--match-physics', action='store_true', help='Use measured initial mass, inertia and COM in controller only')
@@ -741,11 +1114,11 @@ def main():
     r.add_argument('--check-mass-reset', action='store_true', help='Run real-PhysX wet-mass reset assertions with two environments')
     r.add_argument('--matched-executor', action='store_true', help='Use audited free-floating executor model')
     r.add_argument('--surface-approach', action='store_true',
-                   help='Derive actor +Z / target -X bus face goal from loaded geometry at 0.30 m gap')
-    r.add_argument('--surface-stages', nargs=2, type=float, metavar=('TURN_S', 'APPROACH_S'),
-                   help='Optional quintic turn-then-approach reference; default uses the final static goal directly')
+                   help='Derive actor +Z / target -X bus face goal from loaded geometry')
+    r.add_argument('--surface-gap', type=float, choices=(0.1, 0.3, 0.5), default=0.3,
+                   help='Desired actor/target bus-face gap [m]')
     r.add_argument('--surface-sync', type=float, metavar='DURATION_S',
-                   help='Simultaneous quintic position/attitude reference over one duration')
+                   help='Required simultaneous quintic position/attitude reference duration for surface approach')
     r.add_argument('--surface-display-materials', action='store_true',
                    help='Video-only readable colours and bus face highlights; does not alter geometry or physics')
     r.add_argument('--native-goal', action='store_true', help='Use native SRB goal in closed-loop controller')
@@ -757,15 +1130,41 @@ def main():
     if args.mode == 'replay':
         if len(args.target_position) != 3 or not np.all(np.isfinite(args.target_position)):
             parser.error('--target-position must be three finite values')
+        for name in ('initial_linear_velocity', 'initial_attitude_rpy_deg', 'initial_angular_velocity'):
+            value = getattr(args, name)
+            if value is not None and (len(value) != 3 or not np.all(np.isfinite(value))):
+                parser.error(f'--{name.replace("_", "-")} must be three finite values')
         if args.surface_display_materials and not (args.surface_approach and args.video):
             parser.error('--surface-display-materials requires surface-approach and video')
+        if args.record_camera and (not args.video or args.physics_only):
+            parser.error('--record-camera requires rendered video mode and excludes --physics-only')
+        if args.record_camera and any(value <= 0 for value in args.camera_resolution):
+            parser.error('--camera-resolution values must be positive')
+        if args.orbit_lighting_trial and (not args.record_camera or not args.matched_executor or args.video_fill_intensity):
+            parser.error('--orbit-lighting-trial requires record-camera/matched-executor and excludes diagnostic fill lights')
+        if (args.orbit_calibrate or args.orbit_static_only) and not args.orbit_lighting_trial:
+            parser.error('--orbit-calibrate/--orbit-static-only require --orbit-lighting-trial')
+        if args.orbit_static_profiles and not args.orbit_static_only:
+            parser.error('--orbit-static-profiles requires --orbit-static-only')
+        if not np.all(np.isfinite(args.orbit_sun_direction)) or np.linalg.norm(args.orbit_sun_direction) <= 0:
+            parser.error('--orbit-sun-direction must be finite and nonzero')
+        if any(not np.isfinite(v) or v <= 0 for v in (args.orbit_sun_intensity, args.orbit_exposure_time, args.orbit_f_number)) or not np.isfinite(args.orbit_earth_intensity) or args.orbit_earth_intensity < 0:
+            parser.error('orbit sun/exposure must be positive finite; Earth intensity must be nonnegative finite')
+        if args.camera_horizontal_fov is not None and (not args.record_camera or not np.isfinite(args.camera_horizontal_fov) or not 0 < args.camera_horizontal_fov < 180):
+            parser.error('--camera-horizontal-fov requires record-camera and 0 < FOV < 180')
+        if args.metallic_film_material and not args.video:
+            parser.error('--metallic-film-material requires rendered video mode')
+        if args.segmented_satellite_materials and not args.video:
+            parser.error('--segmented-satellite-materials requires rendered video mode')
+        if args.metallic_film_material and args.segmented_satellite_materials:
+            parser.error('--metallic-film-material and --segmented-satellite-materials are mutually exclusive')
         if not np.isfinite(args.video_fill_intensity) or args.video_fill_intensity < 0 or (args.video_fill_intensity and not args.video):
             parser.error('--video-fill-intensity must be finite/nonnegative and requires video')
-        if args.surface_stages and (not args.surface_approach or any(not np.isfinite(s) or s <= 0 for s in args.surface_stages)):
-            parser.error('--surface-stages requires surface-approach and two positive finite durations')
-        if args.surface_sync is not None and (not args.surface_approach or args.surface_stages
+        if args.surface_sync is not None and (not args.surface_approach
                 or not np.isfinite(args.surface_sync) or args.surface_sync <= 0):
-            parser.error('--surface-sync requires surface-approach, a positive finite duration, and excludes surface-stages')
+            parser.error('--surface-sync requires surface-approach and a positive finite duration')
+        if args.surface_approach and args.surface_sync is None:
+            parser.error('--surface-approach requires --surface-sync')
         if args.surface_approach and (not args.matched_executor or args.align_goal or args.native_goal or args.check_mass_reset):
             parser.error('--surface-approach requires matched-executor and excludes align-goal/native-goal/check-mass-reset')
         if args.stable_video_lighting and not args.video:

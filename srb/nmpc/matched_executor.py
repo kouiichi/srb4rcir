@@ -29,8 +29,10 @@ class MatchedExecutor:
 
     def __post_init__(self):
         self.burn_per_duty = np.asarray(self.burn_per_duty, dtype=float)
-        if self.burn_per_duty.shape != (16,) or np.any(self.burn_per_duty < 0):
-            raise ValueError('burn coefficients must be nonnegative shape (16,)')
+        if (self.burn_per_duty.ndim != 1 or len(self.burn_per_duty) == 0
+                or not np.all(np.isfinite(self.burn_per_duty)) or np.any(self.burn_per_duty < 0)):
+            raise ValueError('burn coefficients must be a finite nonnegative nonempty vector')
+        self.num_thrusters = len(self.burn_per_duty)
         self.remaining_fuel = 0.
         self._function = None
 
@@ -44,7 +46,7 @@ class MatchedExecutor:
         R = casadi_quaternion_to_rotation(x[6:10])
         J = ca.reshape(physical[1:10],3,3).T * mass / physical[0]
         Ji = ca.reshape(physical[10:19],3,3).T * physical[0] / mass
-        B = ca.reshape(physical[19:115],16,6).T
+        B = ca.reshape(physical[19:19+6*self.num_thrusters],self.num_thrusters,6).T
         enabled = ca.if_else(fuel > 0., 1., 0.)
         wrench = (B @ u) * enabled
         v = x[3:6] + self.dt * R @ wrench[:3] / mass
@@ -68,7 +70,8 @@ class MatchedExecutor:
     def function(self):
         if self._function is None:
             import casadi as ca
-            x=ca.SX.sym('x',15); u=ca.SX.sym('u',16); p=ca.SX.sym('p',115)
+            x=ca.SX.sym('x',15); u=ca.SX.sym('u',self.num_thrusters)
+            p=ca.SX.sym('p',19+6*self.num_thrusters)
             self._function=ca.Function('matched_step',[x,u,p],[self.symbolic(x,u,p)])
         return self._function
 

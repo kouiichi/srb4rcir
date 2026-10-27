@@ -12,7 +12,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('folder', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--goal-gap-m', type=float, default=.3,
+                        help='Requested bus-face gap for subtitles and plot pass band')
     args = parser.parse_args()
+    if not np.isfinite(args.goal_gap_m) or args.goal_gap_m <= 0:
+        parser.error('--goal-gap-m must be finite and positive')
+    gap_cm = args.goal_gap_m * 100
     if args.output.exists():
         raise FileExistsError(args.output)
     data = np.load(args.folder/'replay.npz')
@@ -40,17 +45,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
     lines.append(f'Dialogue: 0,0:00:00.00,{timestamp(duration)},Header,,0,0,0,,NMPC | Target-relative surface approach | N40 K3'
                  r'\N{\fs16}Blue: actor (+Z top)   Gold: target (-X front)   Green: facing bus surfaces')
     hold = 0
-    stages = result['surface_reference_stages_s']
+    sync_duration = float(result['surface_reference_sync_s'])
     for frame in range(len(data['duties'])):
         # Frame 0 records state 1 (the first actual PhysX step), not state 0.
         i = frame+1
         t = i*dt
         hold = hold+1 if surface['success_sample'][i] else 0
         hold_s = max(0,hold-1)*dt
-        phase = 'DIRECT GOAL' if not stages else ('TURN' if t <= stages[0] else ('APPROACH' if t <= sum(stages) else 'HOLD'))
+        phase = 'SYNC APPROACH' if t <= sync_duration else 'HOLD'
         status = 'HOLD QUALIFIED' if hold_s >= 1 else 'TRACKING'
         text = (f't={t:05.2f} s  |  {phase}  |  {status}'
-                rf'\NProjected bus-face gap: {100*surface["face_gap_m"][i]:.2f} cm (goal: 30 cm)'
+                rf'\NProjected bus-face gap: {100*surface["face_gap_m"][i]:.2f} cm (goal: {gap_cm:g} cm)'
                 f'   Facing error: {surface["facing_error_deg"][i]:.3f} deg'
                 rf'\NFull-mesh plane separation: {100*surface["mesh_plane_gap_m"][i]:.2f} cm'
                 f'   Lateral error: {100*surface["lateral_error_m"][i]:.2f} cm   Hold: {hold_s:.2f} s')
@@ -69,8 +74,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
     times = np.arange(len(data['states']))*dt
     fig, axes = plt.subplots(2,2,figsize=(11,7))
     axes[0,0].plot(times,surface['face_gap_m']*100)
-    axes[0,0].axhspan(28,32,color='green',alpha=.2)
-    axes[0,0].set(ylabel='Projected bus-face gap [cm]',title='Goal: 30 cm +/- 2 cm')
+    axes[0,0].axhspan(gap_cm-2,gap_cm+2,color='green',alpha=.2)
+    axes[0,0].set(ylabel='Projected bus-face gap [cm]',title=f'Goal: {gap_cm:g} cm +/- 2 cm')
     axes[0,1].plot(times,surface['facing_error_deg'])
     axes[0,1].axhline(5,color='gray',ls='--')
     axes[0,1].set(ylabel='Facing error [deg]',title='Actor +Z opposes target -X')

@@ -1,0 +1,186 @@
+{
+  "parameter_basis": "research",
+  "source_or_rationale": "Small-satellite comparison preserving the saved initial root (-3,0.2,0.15), baseline dry mass, fuel, single-nozzle thrust and burn law. Original visual geometry is uniformly scaled; inertia is an explicit uniform bus-box approximation with COM at the source origin. These are not flight dimensions, masses or propulsion calibration. Virtual RCS comparison: retain four original nozzle channels and add four mirrored reverse axial channels plus four tangential lateral channels. Every channel supplies 0.1 N at full duty with the same burn law.",
+  "baseline_physics_record": "logs/nmpc_15m_sync_20260922/full/physics_audit.json",
+  "desdyni": {
+    "scale_m_per_source_unit": 0.03,
+    "mass_kg": 6.108697891235352,
+    "mass_definition": "dry mass before ThrustAction adds remaining fuel",
+    "inertia_B_kg_m2": [
+      [
+        0.05867334490540252,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.05818381553864151,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.021513147894321807
+      ]
+    ],
+    "com_B_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_model": "uniform bus bounding-box approximation; appendage mass distribution and tank geometry are not modeled",
+    "inertia_box_dimensions_m": [
+      0.14369942665100097,
+      0.14700735569000242,
+      0.30601873397827145
+    ],
+    "thruster_power_N": [
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1,
+      0.1
+    ],
+    "fuel_capacity_kg": 5.0,
+    "fuel_consumption_rate": 0.15625,
+    "virtual_thrusters": [
+      {
+        "offset_B_m": [
+          0.012450634092092513,
+          -0.033300924897193905,
+          -0.1530095672607422
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.03345165699720382,
+          -0.01110063210129738,
+          -0.1530095672607422
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          -0.014548862800002098,
+          0.03510077014565468,
+          -0.1530095672607422
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          -0.03554988637566567,
+          0.01290132462978363,
+          -0.1530095672607422
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.0,
+          0.075,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          -1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.0,
+          -0.075,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.075,
+          0.0,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          -0.075,
+          0.0,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "near_shoemaker": {
+    "scale_m_per_source_unit": 0.1,
+    "mass_kg": 6.108697891235352,
+    "inertia_B_kg_m2": [
+      [
+        0.022901636913825383,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.023004857203578206,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.02295330644804839
+      ]
+    ],
+    "com_B_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_model": "uniform central-bus box approximation; no powered target actuators",
+    "inertia_box_dimensions_m": [
+      0.1504867434501648,
+      0.14981152415275575,
+      0.15014912486076357
+    ]
+  },
+  "actuation_layout": "original4_plus_virtual8",
+  "virtual_rcs_mass_model": "Virtual force channels only: no added mesh or hardware mass; original dry mass, inertia, COM and fuel capacity are retained. This is a research actuation model, not a spacecraft hardware design."
+}

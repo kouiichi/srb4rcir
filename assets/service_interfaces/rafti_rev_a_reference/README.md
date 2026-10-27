@@ -13,23 +13,17 @@
 | 后侧管段长度 | 51.6128 mm | 图纸 2.032 in |
 | 模型总轴向包络 | 99.8728 mm | 上述前向、后向包络相加 |
 | 两阀口中心距离 | 30 mm | 图像比例重建参数 |
-| 安装耳厚度、孔径、管径 | 见 reference_parameters.json | 研究重建参数 |
+| 安装耳厚度 | 4 mm | 研究重建参数 |
+| 安装孔直径 | 3.4 mm | 研究重建参数 |
+| 后管外径 / 内径 | 6.4 / 4.2 mm | 研究重建参数 |
 
-原始图纸保存在 `source/rafti_DOC-00133A.pdf`，用户提供的尺寸截图保存在 `source/dimension_reference.png`。图纸没有给出完整制造公差、内部阀机构或主动端 CAD；本模型用于外观、布局及接口坐标研究，配合几何按研究参数定义。
+尺寸依据为 RAFTI DOC-00133 Rev A 图纸及尺寸截图。图纸没有给出完整制造公差、内部阀机构或主动端 CAD；本模型用于外观、布局及接口坐标研究，配合几何按研究参数定义。
 
 ## 文件
 
 | 文件 | 用途 |
 |---|---|
-| `rafti_reference.blend` | 可编辑 Blender 4.3.2 工程，37 个网格对象 |
-| `rafti_reference.usdc` | 独立视觉 USD，默认 prim `/Rafti`，米制、Z-up |
-| `reference_parameters.json` | 图纸尺寸、重建参数和参考坐标 |
-| `preview_front.png`、`preview_side.png`、`preview_oblique.png`、`preview_rear.png` | 模型视图 |
-| `usd_audit.json` | USD 尺寸与引用组合检查 |
-| `blender_geometry_audit.json` | 阀口、安装孔及后管开口检查 |
-| `tools/build_rafti_reference.py` | 根据参数生成 BLEND、USD、预览 |
-| `tools/audit_rafti_asset.py` | 使用 Isaac Sim USD 库检查资产 |
-| `tools/audit_rafti_blend.py` | 使用 Blender 射线检查开口 |
+| `rafti_reference.usdc` | 独立视觉 USD，37 个网格，默认 prim `/Rafti`，米制、Z-up；包含挂载参考系 |
 
 ## 挂载坐标
 
@@ -64,35 +58,3 @@ port.AddOrientOp().Set(Gf.Quatf(0, Gf.Vec3f(1, 0, 0)))
 ```
 
 资产没有单独刚体、碰撞体或燃料转移行为。固定挂载时可归属于卫星刚体；其质量、碰撞代理及后管穿过封板的孔洞由装配配置定义。RAFTI 是被动服务口，配套主动连接器需要单独建模。
-
-## 生成与检查
-
-工作目录：`/home/ubuntu/yyf/space_robotics_bench_0.0.5`。
-
-```sh
-env OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 \
-  /home/ubuntu/blender-4.3.2-linux-x64/blender -b --factory-startup -t 2 \
-  --python-exit-code 1 \
-  --python assets/service_interfaces/rafti_rev_a_reference/tools/build_rafti_reference.py -- \
-  --output assets/service_interfaces/rafti_rev_a_reference
-```
-
-生成脚本会写入并更新该输出目录的模型、参数与预览。检查命令：
-
-```sh
-./srb_0.0.5_env.sh -- env \
-  PYTHONPATH=/home/ubuntu/isaac-sim-4.5/extscache/omni.usd.libs-1.0.1+d02c707b.lx64.r.cp310 \
-  LD_LIBRARY_PATH=/home/ubuntu/isaac-sim-4.5/extscache/omni.usd.libs-1.0.1+d02c707b.lx64.r.cp310/bin \
-  /home/ubuntu/isaac-sim-4.5/python.sh \
-  assets/service_interfaces/rafti_rev_a_reference/tools/audit_rafti_asset.py \
-  assets/service_interfaces/rafti_rev_a_reference
-
-env OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1 \
-  /home/ubuntu/blender-4.3.2-linux-x64/blender \
-  -b assets/service_interfaces/rafti_rev_a_reference/rafti_reference.blend -t 2 \
-  --python-exit-code 1 \
-  --python assets/service_interfaces/rafti_rev_a_reference/tools/audit_rafti_blend.py -- \
-  assets/service_interfaces/rafti_rev_a_reference
-```
-
-已验证图纸外包络、参考坐标、USD 引用组合、八个安装孔贯通、双阀口凹入和后管空心。预览由 Blender CPU Cycles 生成；Kit 渲染、PhysX 接触和流体连接行为分别需要在装配任务中验证。

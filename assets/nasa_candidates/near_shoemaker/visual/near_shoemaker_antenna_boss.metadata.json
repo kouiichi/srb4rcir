@@ -1,0 +1,178 @@
+{
+  "generator_version": 1,
+  "target_variant": "near_antenna_boss",
+  "source_usd": "/home/ubuntu/yyf/space_robotics_bench_0.0.5/assets/nasa_candidates/near_shoemaker/visual/near_shoemaker_original.usdc",
+  "source_sha256": "fdcbbaff07ad820836ca01f002b96a8f5ee65ce5750c802880676d51cb6ab1d1",
+  "derived_usd": "/home/ubuntu/yyf/space_robotics_bench_0.0.5/assets/nasa_candidates/near_shoemaker/visual/near_shoemaker_antenna_boss.usdc",
+  "bus_mesh_path": "/Satellite/foil_gold/NEAR_009",
+  "deck_mesh_path": "/Satellite/tex_01/NEAR_023",
+  "deck_dimensions_source_units": [
+    1.500218420309539,
+    1.5002184206106433,
+    0.03263463209316342
+  ],
+  "bus_dimensions_source_units": [
+    1.5048674561839448,
+    1.498115273003691,
+    1.5014913193506345
+  ],
+  "bus_side_source_units": 1.5048674561839448,
+  "deck_side_source_units": 1.5002184206106433,
+  "bus_height_source_units": 1.5014913193506345,
+  "boss_dimensions_source_units": [
+    1.5002184206106433,
+    1.5002184206106433,
+    0.07507456596753173
+  ],
+  "boss_height_fraction_of_bus": 0.05,
+  "boss_bottom_z_source_units": 0.7576432447049752,
+  "boss_top_z_source_units": 0.8327178106725069,
+  "deck_top_z_source_units": 0.7576432447049752,
+  "removed_component_count": 9,
+  "removed_components": [
+    {
+      "mesh_path": "/Satellite/tex_01/NEAR_023",
+      "component_id": 269,
+      "vertex_count": 24,
+      "face_count": 24,
+      "bounds_min_root": [
+        -0.0269797836719623,
+        -0.026980684940141695,
+        1.1526256366635153
+      ],
+      "bounds_max_root": [
+        0.026980309176257267,
+        0.026979407908077752,
+        1.1526256366635153
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/tex_01/NEAR_023",
+      "component_id": 270,
+      "vertex_count": 20,
+      "face_count": 18,
+      "bounds_min_root": [
+        -0.05218276847717007,
+        -0.05218366974534963,
+        1.175889681579065
+      ],
+      "bounds_max_root": [
+        0.05218311300874556,
+        0.052182211740566205,
+        1.175889681579065
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/tex_01/NEAR_023",
+      "component_id": 271,
+      "vertex_count": 24,
+      "face_count": 24,
+      "bounds_min_root": [
+        -0.015670798431861144,
+        -0.015671699700040568,
+        1.1526256366635153
+      ],
+      "bounds_max_root": [
+        0.015671323936156112,
+        0.015670422667976625,
+        1.175889681579065
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/tex_01/NEAR_023",
+      "component_id": 272,
+      "vertex_count": 84,
+      "face_count": 154,
+      "bounds_min_root": [
+        -0.0269797836719623,
+        -0.026980684940141695,
+        1.13485429518812
+      ],
+      "bounds_max_root": [
+        0.026980309176257267,
+        0.026979407908077752,
+        1.1526256366635153
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/foil_gold/NEAR_009",
+      "component_id": 0,
+      "vertex_count": 12,
+      "face_count": 12,
+      "bounds_min_root": [
+        -0.43152052532792595,
+        0.000563051417685756,
+        0.6184955466557085
+      ],
+      "bounds_max_root": [
+        -0.019927812570017522,
+        0.13032339703548246,
+        1.1759950828173942
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/foil_gold/NEAR_009",
+      "component_id": 1,
+      "vertex_count": 12,
+      "face_count": 12,
+      "bounds_min_root": [
+        0.014714078598842661,
+        0.01157212048292422,
+        0.6044039237743846
+      ],
+      "bounds_max_root": [
+        0.33265620675075525,
+        0.3234960003760534,
+        1.1759950828173942
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/foil_gold/NEAR_009",
+      "component_id": 2,
+      "vertex_count": 12,
+      "face_count": 12,
+      "bounds_min_root": [
+        -0.004808671749998439,
+        -0.4348092523308651,
+        0.6161468825179099
+      ],
+      "bounds_max_root": [
+        0.11805267655734042,
+        -0.021601900842995292,
+        1.1759950828173942
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/foil_gold/NEAR_009",
+      "component_id": 20,
+      "vertex_count": 160,
+      "face_count": 298,
+      "bounds_min_root": [
+        -0.03431297322538285,
+        -0.03437242276839925,
+        1.3508192678780233
+      ],
+      "bounds_max_root": [
+        0.03438364307788788,
+        0.034324238778054905,
+        1.4322864965930648
+      ]
+    },
+    {
+      "mesh_path": "/Satellite/foil_gold/NEAR_009",
+      "component_id": 21,
+      "vertex_count": 40,
+      "face_count": 40,
+      "bounds_min_root": [
+        -0.05207431595724188,
+        -0.052133720257074856,
+        1.1759950828173942
+      ],
+      "bounds_max_root": [
+        0.05214494056656349,
+        0.052085536266730514,
+        1.3508192678780233
+      ]
+    }
+  ]
+}

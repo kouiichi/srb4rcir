@@ -1,0 +1,186 @@
+{
+  "parameter_basis": "research",
+  "source_or_rationale": "Research pair with DESDynI scale 0.06 m/source unit and NEAR scale 0.2 m/source unit. Both spacecraft use eightfold base dry masses with 32-fold dry inertia. DESDynI carries 5 kg fuel; wet inertia uses the SRB proportional wet/dry mass model. Original meshes and COM are preserved. Twelve one-sided channels share a thrust rating selected from the 50 s synchronous reference at initial wet properties using nonnegative min-max wrench allocation, a 1.5 sizing factor, a 0.2 N floor and 0.05 N upward increments. Parameters are research assumptions, not flight calibration. Sizing evidence is logs/nmpc_desdyni_near_scale2_gimbal_20261016/thrust_sizing.json.",
+  "baseline_physics_record": "logs/nmpc_15m_sync_20260922/full/physics_audit.json",
+  "desdyni": {
+    "scale_m_per_source_unit": 0.06,
+    "mass_kg": 48.86958312988281,
+    "mass_definition": "dry mass before ThrustAction adds remaining fuel",
+    "inertia_B_kg_m2": [
+      [
+        1.8775470369728806,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.8618820972365284,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.6884207326182978
+      ]
+    ],
+    "com_B_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_model": "uniform bus bounding-box approximation; appendage mass distribution and tank geometry are not modeled",
+    "inertia_box_dimensions_m": [
+      0.28739885330200193,
+      0.29401471138000485,
+      0.6120374679565429
+    ],
+    "thruster_power_N": [
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4,
+      0.4
+    ],
+    "fuel_capacity_kg": 5.0,
+    "fuel_consumption_rate": 0.15625,
+    "virtual_thrusters": [
+      {
+        "offset_B_m": [
+          0.024901268184185026,
+          -0.06660184979438781,
+          -0.3060191345214844
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.06690331399440765,
+          -0.02220126420259476,
+          -0.3060191345214844
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          -0.029097725600004197,
+          0.07020154029130936,
+          -0.3060191345214844
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          -0.07109977275133134,
+          0.02580264925956726,
+          -0.3060191345214844
+        ],
+        "exhaust_direction_B": [
+          -0.0,
+          -0.0,
+          -1.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.0,
+          0.15,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          -1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.0,
+          -0.15,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          0.15,
+          0.0,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      },
+      {
+        "offset_B_m": [
+          -0.15,
+          0.0,
+          0.0
+        ],
+        "exhaust_direction_B": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      }
+    ]
+  },
+  "near_shoemaker": {
+    "scale_m_per_source_unit": 0.2,
+    "mass_kg": 48.86958312988281,
+    "inertia_B_kg_m2": [
+      [
+        0.7328523812424123,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.7361554305145026,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.7345058063375485
+      ]
+    ],
+    "com_B_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "inertia_model": "uniform central-bus box approximation; no powered target actuators",
+    "inertia_box_dimensions_m": [
+      0.3009734869003296,
+      0.2996230483055115,
+      0.30029824972152713
+    ]
+  },
+  "actuation_layout": "original4_plus_virtual8",
+  "virtual_rcs_mass_model": "Twelve force channels: four aligned with original nozzle visuals and eight explicitly located virtual channels. No extra mesh or hardware mass is added. Dry mass, dry inertia, COM, fuel and all nozzle ratings are explicit research parameters."
+}
